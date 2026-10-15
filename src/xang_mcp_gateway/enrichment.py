@@ -63,9 +63,6 @@ VCP_NUM_BASES_PATH: list[str] = [
 
 ENRICHMENT_FIELD_COUNT = len(TOP_LEVEL_FIELDS) + 1 + len(SETUP_ENGINE_PREFIXED)  # == 21
 
-SQL_CURRENT_RUN_ID = (
-    "SELECT id FROM feature_runs WHERE status = 'published' ORDER BY id DESC LIMIT 1"
-)
 SQL_FETCH_FACTS = """
 SELECT
     symbol,
@@ -111,7 +108,7 @@ def build_facts(row: dict[str, Any]) -> dict[str, Any]:
 class FactsProvider(Protocol):
     """Source of per-symbol feature facts (SQL store in production, fakes in tests)."""
 
-    def facts_for(self, symbols: list[str]) -> dict[str, dict[str, Any]]: ...
+    def facts_for(self, symbols: list[str], run_id: int) -> dict[str, dict[str, Any]]: ...
 
 
 class SqlFeatureStore:
@@ -136,7 +133,8 @@ class SqlFeatureStore:
                 cursor.execute("SELECT 1")
                 return list(cursor.fetchone())[0] == 1
 
-    def facts_for(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+    def facts_for(self, symbols: list[str], run_id: int) -> dict[str, dict[str, Any]]:
+        """Fetch facts for exactly the run the response carries (mismatch-safe)."""
         if not symbols:
             return {}
         try:
@@ -146,12 +144,7 @@ class SqlFeatureStore:
 
         with self._connect() as conn:
             with conn.cursor(row_factory=dict_row) as cursor:
-                cursor.execute(SQL_CURRENT_RUN_ID)
-                run_row = cursor.fetchone()
-                if run_row is None:
-                    logger.warning("no published feature run found; enrichment skipped")
-                    return {}
-                cursor.execute(SQL_FETCH_FACTS, (VCP_NUM_BASES_PATH, run_row["id"], list(symbols)))
+                cursor.execute(SQL_FETCH_FACTS, (VCP_NUM_BASES_PATH, run_id, list(symbols)))
                 rows = cursor.fetchall()
         return {row["symbol"]: build_facts(row) for row in rows}
 

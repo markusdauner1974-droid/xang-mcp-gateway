@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import math
 import os
 from dataclasses import dataclass
 
@@ -64,6 +65,8 @@ class GatewaySettings:
     db_dsn: str | None = None
 
     def __post_init__(self) -> None:
+        if not math.isfinite(self.request_timeout_seconds) or self.request_timeout_seconds <= 0:
+            raise GatewayConfigError("request_timeout_seconds must be a finite positive number")
         url = self.backend_mcp_url.strip()
         if not url:
             raise GatewayConfigError("backend_mcp_url must not be empty")
@@ -105,9 +108,16 @@ class GatewaySettings:
             backend_token=source.get("XANG_BACKEND_TOKEN", ""),
             gateway_token=source.get("GATEWAY_TOKEN", ""),
             excluded_tools=excluded,
-            request_timeout_seconds=float(source.get("GATEWAY_REQUEST_TIMEOUT", "120")),
+            request_timeout_seconds=_parse_timeout(source.get("GATEWAY_REQUEST_TIMEOUT", "120")),
             db_dsn=source.get("XANG_DB_DSN") or None,
         )
+
+
+def _parse_timeout(raw: str) -> float:
+    try:
+        return float(raw)
+    except (TypeError, ValueError) as exc:
+        raise GatewayConfigError("GATEWAY_REQUEST_TIMEOUT must be a number") from exc
 
 
 def hmac_equal(left: str, right: str) -> bool:

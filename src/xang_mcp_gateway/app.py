@@ -14,6 +14,7 @@ Endpoint contract:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -50,8 +51,12 @@ def _apply_marker(target: dict[str, Any], marker: dict[str, Any]) -> None:
     target["gateway"] = marker
 
 
-def _enrich_result(result: dict[str, Any], provider: FactsProvider) -> dict[str, Any]:
-    """Enrich a tools/call result in place; never raise (fail-closed markers)."""
+async def _enrich_result(result: dict[str, Any], provider: FactsProvider) -> None:
+    """Enrich a tools/call result in place; never raise (fail-closed markers).
+
+    Blocking provider calls run in a worker thread (asyncio.to_thread) so a slow
+    or unreachable Postgres cannot stall the event loop — keeping /healthz live.
+    """
     structured = result.get("structuredContent")
     text_entry: dict[str, Any] | None = None
     text_target: dict[str, Any] | None = None
@@ -66,21 +71,35 @@ def _enrich_result(result: dict[str, Any], provider: FactsProvider) -> dict[str,
                     text_target = json.loads(entry["text"])
                 except json.JSONDecodeError:
                     logger.warning("content[0].text is not JSON; enrichment skipped")
-                    return result
+                    return
                 break
 
     base_target = structured if isinstance(structured, dict) else text_target
     if base_target is None:
-        return result
+        return
     symbols = base_target.get("symbols")
     if not isinstance(symbols, list):
-        return result  # not a candidates-shaped response: pass through untouched
+        return  # not a candidates-shaped response: pass through untouched
     requested = [item.get("symbol") for item in symbols if isinstance(item, dict) and item.get("symbol")]
     if not requested:
-        return result
+        return
+
+    run = base_target.get("run")
+    run_id = run.get("id") if isinstance(run, dict) else None
+    if not isinstance(run_id, int) or isinstance(run_id, bool):
+        # Facts of a different (newer) published run could mismatch this
+        # response; skip instead of risking a run-id mismatch.
+        logger.warning("response run id missing or invalid; enrichment skipped")
+        skip = _marker("skipped", reason="response run id missing or invalid")
+        if isinstance(structured, dict):
+            _apply_marker(structured, skip)
+        if text_target is not None and text_entry is not None:
+            _apply_marker(text_target, skip)
+            text_entry["text"] = json.dumps(text_target, ensure_ascii=False)
+        return
 
     try:
-        facts_by_symbol = provider.facts_for(requested)
+        facts_by_symbol = await asyncio.to_thread(provider.facts_for, requested, run_id)
     except Exception as exc:  # noqa: BLE001 - enrichment must never break passthrough
         logger.warning("fact enrichment failed: %s", exc)
         failure = _marker("unavailable", reason="feature-store read failed")
@@ -89,22 +108,19 @@ def _enrich_result(result: dict[str, Any], provider: FactsProvider) -> dict[str,
         if text_target is not None and text_entry is not None:
             _apply_marker(text_target, failure)
             text_entry["text"] = json.dumps(text_target, ensure_ascii=False)
-        return result
+        return
 
-    enriched_count = 0
     if isinstance(structured, dict):
-        enriched_count = max(enriched_count, enrich_target(structured, facts_by_symbol))
+        enriched_count = enrich_target(structured, facts_by_symbol)
         _apply_marker(structured, _marker("applied", fields=ENRICHMENT_FIELD_COUNT,
                                           symbols_enriched=enriched_count,
                                           symbols_missing=len(requested) - enriched_count))
-    if isinstance(text_target, dict):
+    if isinstance(text_target, dict) and text_entry is not None:
         text_enriched = enrich_target(text_target, facts_by_symbol)
-        if text_entry is not None:
-            _apply_marker(text_target, _marker("applied", fields=ENRICHMENT_FIELD_COUNT,
-                                               symbols_enriched=text_enriched,
-                                               symbols_missing=len(requested) - text_enriched))
-            text_entry["text"] = json.dumps(text_target, ensure_ascii=False)
-    return result
+        _apply_marker(text_target, _marker("applied", fields=ENRICHMENT_FIELD_COUNT,
+                                           symbols_enriched=text_enriched,
+                                           symbols_missing=len(requested) - text_enriched))
+        text_entry["text"] = json.dumps(text_target, ensure_ascii=False)
 
 
 def create_app(
@@ -140,18 +156,26 @@ def create_app(
             status, payload = await transport.post_jsonrpc(
                 {"jsonrpc": "2.0", "id": "readyz", "method": "tools/list"}
             )
+            jsonrpc_result = payload.get("result") if isinstance(payload, dict) else None
+            tools = jsonrpc_result.get("tools") if isinstance(jsonrpc_result, dict) else None
             backend_tools = [
                 tool.get("name")
-                for tool in (payload or {}).get("result", {}).get("tools", [])
+                for tool in (tools if isinstance(tools, list) else [])
                 if isinstance(tool, dict)
             ]
             visible = [name for name in backend_tools if name in settings.allowed_tools]
-            checks["backend_mcp"] = {"ok": status == 200, "tools_visible": len(visible)}
+            # A JSON-RPC error body arrives with HTTP 200: only a dictionary result
+            # counts as a successful probe (readiness, not status-code guessing).
+            checks["backend_mcp"] = {
+                "ok": status == 200 and isinstance(jsonrpc_result, dict),
+                "tools_visible": len(visible),
+            }
         except BackendUnavailable as exc:
             checks["backend_mcp"] = {"ok": False, "error": str(exc)}
         if facts_provider is not None:
             try:
-                checks["feature_store"] = {"ok": bool(facts_provider.ping())}
+                db_ok = await asyncio.to_thread(facts_provider.ping)
+                checks["feature_store"] = {"ok": bool(db_ok)}
             except Exception as exc:  # noqa: BLE001 - readiness must stay robust
                 checks["feature_store"] = {"ok": False, "error": str(exc)}
         ok = all(check.get("ok", False) for check in checks.values())
@@ -228,7 +252,7 @@ def create_app(
         ):
             # Enrichment mutates payload["result"] in place (markers + text mirror);
             # it never raises and never replaces the passthrough payload.
-            _enrich_result(result, facts_provider)
+            await _enrich_result(result, facts_provider)
         return JSONResponse(content=payload)
 
     return app

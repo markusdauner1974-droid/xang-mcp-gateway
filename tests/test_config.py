@@ -61,6 +61,32 @@ def test_enrichment_disabled_without_db_dsn() -> None:
     assert settings.enrichable_tools == frozenset({"find_candidates"})
 
 
+class TestConfigTimeoutValidation:
+    def test_from_env_invalid_number_is_config_error(self) -> None:
+        with pytest.raises(GatewayConfigError, match="GATEWAY_REQUEST_TIMEOUT"):
+            GatewaySettings.from_env(
+                {"XANG_BACKEND_TOKEN": BACKEND_TOKEN, "GATEWAY_TOKEN": GATEWAY_TOKEN, "GATEWAY_REQUEST_TIMEOUT": "abc"}
+            )
+
+    @pytest.mark.parametrize("bad", [0, -5.0, float("nan"), float("inf")])
+    def test_nonfinite_and_nonpositive_rejected_at_boundary(self, bad: float) -> None:
+        with pytest.raises(GatewayConfigError, match="finite positive"):
+            make_settings(request_timeout_seconds=bad)
+
+    def test_valid_timeout_accepted(self) -> None:
+        assert make_settings(request_timeout_seconds=42.5).request_timeout_seconds == 42.5
+
+
+def test_main_exits_with_configuration_error_on_bad_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    from xang_mcp_gateway.__main__ import main
+
+    monkeypatch.setenv("XANG_BACKEND_TOKEN", BACKEND_TOKEN)
+    monkeypatch.setenv("GATEWAY_TOKEN", GATEWAY_TOKEN)
+    monkeypatch.setenv("GATEWAY_PORT", "not-a-port")
+    with pytest.raises(SystemExit, match="configuration error"):
+        main()
+
+
 def test_from_env_defaults() -> None:
     settings = GatewaySettings.from_env(
         {"XANG_BACKEND_TOKEN": BACKEND_TOKEN, "GATEWAY_TOKEN": GATEWAY_TOKEN}

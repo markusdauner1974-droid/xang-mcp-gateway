@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 from typing import Any
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from xang_mcp_gateway.app import create_app
@@ -13,9 +16,11 @@ from xang_mcp_gateway.enrichment import (
     ENRICHMENT_FIELD_COUNT,
     SETUP_ENGINE_PREFIXED,
     TOP_LEVEL_FIELDS,
+    VCP_NUM_BASES_PATH,
     SqlFeatureStore,
     build_facts,
 )
+from xang_mcp_gateway.rpc import BackendUnavailable, HttpxTransport
 
 from .conftest import (
     ENRICHED_FACTS_NVDA,
@@ -102,24 +107,21 @@ class TestBuildFactsPureMapping:
 
 
 class TestSqlFeatureStore:
-    def test_facts_for_uses_published_run_and_returns_mapping(self) -> None:
-        scripted_rows: list[list[dict[str, Any] | dict[str, Any]]] = [
-            [{"id": 20}],
-            [facts_sql_row()],
-        ]
-        store = SqlFeatureStore("postgresql://ro@db/stockscanner", connect_factory=lambda: FakeConnection(scripted_rows))
-        facts = store.facts_for(["NVDA"])
+    def test_facts_for_queries_the_requested_run(self) -> None:
+        store_conn = FakeConnection([[facts_sql_row()]])
+        store = SqlFeatureStore("postgresql://ro@db/stockscanner", connect_factory=lambda: store_conn)
+        facts = store.facts_for(["NVDA"], 20)
         assert facts["NVDA"]["minervini_rating"] == "Buy"
         assert facts["NVDA"]["vcp_num_bases"] == 3
         assert facts["NVDA"]["se_readiness_score"] == 72.0
+        # exact-run contract: no separate "newest published" lookup, run_id passed through
+        sql, params = store_conn.cursor_obj.executed[0]
+        assert "stock_feature_daily" in sql and "run_id = %s" in sql
+        assert params == (VCP_NUM_BASES_PATH, 20, ["NVDA"])
 
     def test_empty_symbol_list_short_circuits(self) -> None:
         store = SqlFeatureStore("dsn", connect_factory=lambda: (_ for _ in ()).throw(AssertionError("no connect")))
-        assert store.facts_for([]) == {}
-
-    def test_no_published_run_returns_empty(self) -> None:
-        store = SqlFeatureStore("dsn", connect_factory=lambda: FakeConnection([[]]))
-        assert store.facts_for(["NVDA"]) == {}
+        assert store.facts_for([], 20) == {}
 
 
 class FakeCursor:
@@ -170,7 +172,7 @@ class TestResponseEnrichment:
         resp = client.post("/mcp/", json=find_candidates_call(["NVDA", "AMD"]), headers=AUTH)
         assert resp.status_code == 200
         body = resp.json()
-        assert provider.requested == [["NVDA", "AMD"]]
+        assert provider.requested == [(["NVDA", "AMD"], 20)]
 
         structured = body["result"]["structuredContent"]
         nvda = structured["symbols"][0]
@@ -222,6 +224,40 @@ class TestResponseEnrichment:
         assert "gateway" not in body["result"]["structuredContent"]
         assert provider.requested == []
 
+    def test_missing_run_id_skips_enrichment_with_marker(self, sample_facts: dict[str, dict[str, Any]]) -> None:
+        provider = FakeFactsProvider(facts=sample_facts)
+        envelope = candidate_envelope(["NVDA"])
+        envelope.pop("run")  # malformed response: no run block at all
+        transport = FakeTransport([(200, candidates_result_payload(envelope))])
+        client = make_client(transport, provider=provider)
+        resp = client.post("/mcp/", json=find_candidates_call(["NVDA"]), headers=AUTH)
+        structured = resp.json()["result"]["structuredContent"]
+        assert structured["gateway"]["enrichment"] == "skipped"
+        assert "run id missing" in structured["gateway"]["reason"]
+        assert provider.requested == []  # no facts fetched for a mismatched run
+        assert "minervini_rating" not in structured["symbols"][0]  # base data intact
+
+    @pytest.mark.parametrize("bad_run_id", [True, "20", 20.5, None])
+    def test_invalid_run_id_types_skip_enrichment(self, sample_facts: dict[str, dict[str, Any]], bad_run_id: Any) -> None:
+        provider = FakeFactsProvider(facts=sample_facts)
+        envelope = candidate_envelope(["NVDA"])
+        envelope["run"] = {"id": bad_run_id}
+        transport = FakeTransport([(200, candidates_result_payload(envelope))])
+        client = make_client(transport, provider=provider)
+        resp = client.post("/mcp/", json=find_candidates_call(["NVDA"]), headers=AUTH)
+        structured = resp.json()["result"]["structuredContent"]
+        assert structured["gateway"]["enrichment"] == "skipped"
+        assert provider.requested == []
+
+    def test_int_run_id_of_newer_run_is_used_verbatim(self, sample_facts: dict[str, dict[str, Any]]) -> None:
+        provider = FakeFactsProvider(facts=sample_facts)
+        envelope = candidate_envelope(["NVDA"])
+        envelope["run"] = {"id": 21, "as_of_date": "2026-10-15"}
+        transport = FakeTransport([(200, candidates_result_payload(envelope))])
+        client = make_client(transport, provider=provider)
+        assert client.post("/mcp/", json=find_candidates_call(["NVDA"]), headers=AUTH).status_code == 200
+        assert provider.requested == [(["NVDA"], 21)]
+
     def test_enrichment_disabled_leaves_response_absolutely_untouched(self) -> None:
         envelope = candidate_envelope(["NVDA"])
         backend = candidates_result_payload(envelope)
@@ -241,3 +277,23 @@ class TestResponseEnrichment:
         assert resp.json() == original
         # provider never consulted because no structuredContent AND no parsable text
         assert provider.requested == []
+
+
+class TestHttpxTransportHardening:
+    def test_non_object_backend_payload_is_downstream_error(self) -> None:
+        """CodeRabbit finding: HTTP-200 JSON lists/scalars must never reach clients."""
+        transport = HttpxTransport(make_settings())
+        transport._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[1, 2, 3]))
+        )
+        with pytest.raises(BackendUnavailable, match="non-object"):
+            asyncio.run(transport.post_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+
+    def test_object_payload_passes_unchanged(self) -> None:
+        transport = HttpxTransport(make_settings())
+        payload = {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}}
+        transport._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+        )
+        status, body = asyncio.run(transport.post_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+        assert status == 200 and body == payload

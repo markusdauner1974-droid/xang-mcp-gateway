@@ -59,4 +59,6 @@ class HttpxTransport:
             payload = response.json()
         except ValueError as exc:
             raise BackendUnavailable("backend returned a non-JSON body") from exc
+        if not isinstance(payload, dict):
+            raise BackendUnavailable("backend returned a non-object JSON body")
         return 200, payload

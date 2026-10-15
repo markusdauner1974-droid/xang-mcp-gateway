@@ -57,10 +57,10 @@ class FakeFactsProvider:
         self._facts = facts or {}
         self._error = error
         self._ping_ok = ping_ok
-        self.requested: list[list[str]] = []
+        self.requested: list[tuple[list[str], int]] = []
 
-    def facts_for(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
-        self.requested.append(list(symbols))
+    def facts_for(self, symbols: list[str], run_id: int) -> dict[str, dict[str, Any]]:
+        self.requested.append((list(symbols), run_id))
         if self._error is not None:
             raise self._error
         return {s: dict(self._facts[s]) for s in symbols if s in self._facts}

@@ -69,7 +69,7 @@ decision log (`mcp_gateway` section) and on the shared knowledge base.
 | `GATEWAY_TOKEN` | Token clients must present (`Authorization: Bearer ...` or `x-gateway-token`). Fail fast when missing. |
 | `XANG_BACKEND_TOKEN` | The backend MCP bearer secret (`SERVER_AUTH_PASSWORD` value). Stays inside the gateway process. |
 | `XANG_MCP_URL` | Backend endpoint; default `http://xang1234-backend-1:8000/mcp/` — always normalised to a trailing slash (the bare path only redirects). |
-| `XANG_DB_DSN` | Read-only Postgres DSN for the feature store; unset = enrichment disabled (fail-closed markers in responses). |
+| `XANG_DB_DSN` | Read-only Postgres DSN for the feature store; unset = enrichment disabled (responses pass through unchanged, no markers). |
 | `GATEWAY_EXCLUDED_TOOLS` | Comma-separated tool exclusions; default `watchlist_add`. |
 | `GATEWAY_REQUEST_TIMEOUT` | Per-request backend timeout in seconds (default 120). |
 | `GATEWAY_HOST` / `GATEWAY_PORT` | Bind address for `python -m xang_mcp_gateway` (default `127.0.0.1:9160`). |

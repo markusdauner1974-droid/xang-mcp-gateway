@@ -13,12 +13,16 @@ def main() -> None:
         settings = GatewaySettings.from_env()
     except GatewayConfigError as exc:
         raise SystemExit(f"configuration error: {exc}") from exc
+    try:
+        port = int(os.getenv("GATEWAY_PORT", "9160"))
+    except ValueError as exc:
+        raise SystemExit(f"configuration error: invalid GATEWAY_PORT: {exc}") from exc
     import uvicorn
 
     uvicorn.run(
         create_app(settings),
         host=os.getenv("GATEWAY_HOST", "127.0.0.1"),
-        port=int(os.getenv("GATEWAY_PORT", "9160")),
+        port=port,
     )
 
 

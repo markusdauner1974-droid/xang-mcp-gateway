@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from fastapi.testclient import TestClient
 
 from xang_mcp_gateway import __version__
@@ -206,13 +204,14 @@ class TestHealthEndpoints:
         assert resp.json()["status"] == "degraded"
         assert resp.json()["checks"]["backend_mcp"]["ok"] is False
 
-
-def test_content_text_payload_parsing_is_tolerant() -> None:
-    """A malformed text mirror must not crash the gateway (no enrichment path)."""
-    payload = {
-        "result": {
-            "content": [{"type": "text", "text": "not-json"}],
-            "structuredContent": {"symbols": [{"symbol": "NVDA"}]},
-        }
-    }
-    assert json.dumps(payload)  # serializer sanity
+    def test_readyz_degrades_on_jsonrpc_error_body_despite_http_200(self) -> None:
+        """A JSON-RPC error arrives with HTTP 200 — that is NOT backend readiness."""
+        transport = FakeTransport(
+            [(200, {"jsonrpc": "2.0", "id": "readyz", "error": {"code": -32601, "message": "no"}})]
+        )
+        resp = make_client(transport).get("/readyz")
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["status"] == "degraded"
+        assert body["checks"]["backend_mcp"]["ok"] is False
+        assert body["checks"]["backend_mcp"]["tools_visible"] == 0
