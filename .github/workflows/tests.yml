@@ -52,3 +52,38 @@ jobs:
 
       - name: Run test suite
         run: python -m pytest tests -q --tb=short
+
+  docker-smoke:
+    name: Docker image build + healthz smoke
+    needs: [test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build image (no push)
+        run: docker build -t xang-mcp-gateway:ci .
+
+      - name: Run container and poll /healthz (proves liveness without any backend)
+        run: |
+          docker run -d --name gw-ci-smoke \
+            -e GATEWAY_TOKEN=ci-smoke-token \
+            -e XANG_BACKEND_TOKEN=ci-backend-stub \
+            -e XANG_MCP_URL=http://127.0.0.1:1/mcp/ \
+            -e XANG_DB_DSN=postgresql://ci@127.0.0.1:1/none \
+            xang-mcp-gateway:ci
+          code=0
+          for i in $(seq 1 25); do
+            code=$(docker exec gw-ci-smoke python -c \
+              "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:9160/healthz', timeout=2).status)" \
+              2>/dev/null || echo 0)
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          docker logs gw-ci-smoke || true
+          docker inspect gw-ci-smoke --format 'health: {{.State.Health.Status}}'
+          [ "$code" = "200" ] || { echo 'smoke failed: healthz never answered 200'; docker rm -f gw-ci-smoke; exit 1; }
+          docker rm -f gw-ci-smoke
