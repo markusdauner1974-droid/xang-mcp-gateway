@@ -8,6 +8,7 @@ from xang_mcp_gateway import GatewayConfigError
 from xang_mcp_gateway.config import (
     ALL_BACKEND_TOOLS,
     DEFAULT_EXCLUDED_TOOLS,
+    LOCAL_TOOLS,
     GatewaySettings,
 )
 
@@ -43,9 +44,13 @@ def test_identical_tokens_rejected() -> None:
 
 def test_allowed_tools_excludes_default_write_tool() -> None:
     settings = make_settings()
-    assert settings.allowed_tools == ALL_BACKEND_TOOLS - DEFAULT_EXCLUDED_TOOLS
+    # Phase 7: surface = backend passthrough tools (minus write tool) + the
+    # local canonical calendar tool (see calendar.py).
+    assert settings.allowed_tools == (
+        (ALL_BACKEND_TOOLS - DEFAULT_EXCLUDED_TOOLS) | LOCAL_TOOLS
+    )
     assert "watchlist_add" not in settings.allowed_tools
-    assert len(settings.allowed_tools) == 12
+    assert len(settings.allowed_tools) == 12 + 1
 
 
 def test_custom_exclusion_list() -> None:
