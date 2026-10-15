@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xang-mcp-gateway"
+version = "0.1.0"
+description = "Standalone MCP gateway for the xang1234 stock-screener stack (tool passthrough + candidate-fact enrichment)"
+readme = "README.md"
+requires-python = ">=3.13"
+
+[tool.ruff]
+line-length = 140
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+# Greenfield: no ignores until a real convention demands one (document any
+# future ignore here with a reason, as in the operator's paperbroker repo).
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
