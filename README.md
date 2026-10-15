@@ -44,6 +44,42 @@ application.
 - Database access is read-only and limited to the feature-store tables.
 - Stack deployment happens manually (Arcane), as with the other stacks on this QNAP.
 
+## Deployment (Arcane stack template)
+
+`docker-compose.yml` in this repository is the Arcane import template, following
+the operator's paperbroker-screener pattern: image from GHCR (built by CI on every
+`main` push as `ghcr.io/markusdauner1974-droid/xang-mcp-gateway:latest` +
+`:sha-<commit>`, arm64+amd64), LAN-only host binding, external `md-netzwerk`
+attachment (backend and Postgres reachable by container name), and **mandatory**
+secrets (`${VAR:?...}`) so the stack never deploys with missing credentials.
+
+Suggested Arcane env block:
+
+```dotenv
+GATEWAY_TOKEN=<own client token for AI clients>
+XANG_BACKEND_TOKEN=<value of SERVER_AUTH_PASSWORD of xang1234-backend-1>
+XANG_DB_DSN=postgresql://xang_ro:<password>@xang1234-postgres-1:5432/stockscanner
+HOST_PORT=9160            # verified free on the QNAP 2026-10-15
+CONTAINER_NAME=xang-mcp-gateway
+```
+
+The container port is hard-fixed to 9160; the module default binds `127.0.0.1`
+but the image/compose set `GATEWAY_HOST=0.0.0.0` (reachability comes only from
+the LAN-only host binding — never publish a router port forward).
+
+### Read-only database user (operator step)
+
+The production DSN should be a DB user that can only read the feature store:
+
+```sql
+CREATE ROLE xang_ro LOGIN PASSWORD '<password>';
+GRANT USAGE ON SCHEMA public TO xang_ro;
+GRANT SELECT ON stock_feature_daily, feature_runs TO xang_ro;
+```
+
+The gateway only ever issues SELECTs against `feature_runs`/`stock_feature_daily`.
+Run this in the stack's Postgres (`xang1234-postgres-1`) at deploy time.
+
 ## Status
 
 Phase-3 prototype (decision 2026-10-15): FastAPI gateway with authenticated

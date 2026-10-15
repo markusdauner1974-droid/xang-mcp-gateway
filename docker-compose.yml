@@ -1,0 +1,41 @@
+# XANG MCP Gateway — operator stack template (Arcane import, paperbroker pattern).
+#
+# Every operator-specific value is an env reference with a default; secrets are
+# MANDATORY via ${VAR:?...} so an import never deploys with missing credentials
+# (lesson from the paperbroker PR #7 review).
+#
+# Arcane env block suggestion (individual values, not on GitHub):
+#   GATEWAY_TOKEN=<own client token for AI clients>
+#   XANG_BACKEND_TOKEN=<value of SERVER_AUTH_PASSWORD of xang1234-backend-1>
+#   XANG_DB_DSN=postgresql://<read-only-user>:<password>@xang1234-postgres-1:5432/stockscanner
+#   HOST_PORT=9160   (verified free on this QNAP 2026-10-15)
+#   CONTAINER_NAME=xang-mcp-gateway
+#
+# The container joins the EXISTING md-netzwerk so it can reach
+# xang1234-backend-1 and xang1234-postgres-1 by container name.
+
+services:
+  gateway:
+    image: ${IMAGE:-ghcr.io/markusdauner1974-droid/xang-mcp-gateway:latest}
+    container_name: ${CONTAINER_NAME:-xang-mcp-gateway}
+    restart: unless-stopped
+    networks:
+      - md-netzwerk
+    environment:
+      # Mandatory secrets — deploy fails fast when unset (no silent defaults).
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:?GATEWAY_TOKEN is required}
+      XANG_BACKEND_TOKEN: ${XANG_BACKEND_TOKEN:?XANG_BACKEND_TOKEN is required}
+      XANG_DB_DSN: ${XANG_DB_DSN:?XANG_DB_DSN is required}
+      # Backend endpoint (default = live stack, container-name reachable in md-netzwerk)
+      XANG_MCP_URL: ${XANG_MCP_URL:-http://xang1234-backend-1:8000/mcp/}
+      # The container must listen on all interfaces; exposure stays LAN-only
+      # via the host-IP port binding below. Never publish a public port forward.
+      GATEWAY_HOST: 0.0.0.0
+
+    ports:
+      # LAN-only bind (host LAN IP, no router forward — operator convention).
+      - "${LAN_IP:-192.168.178.10}:${HOST_PORT:-9160}:9160"
+
+networks:
+  md-netzwerk:
+    external: true
