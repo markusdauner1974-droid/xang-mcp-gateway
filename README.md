@@ -46,9 +46,33 @@ application.
 
 ## Status
 
-Project scaffold (package skeleton, ruff/pytest CI). The gateway prototype is next.
-Design decision and verified data paths are documented in the operator's decision
-log (`mcp_gateway` section) and on the shared knowledge base.
+Phase-3 prototype (decision 2026-10-15): FastAPI gateway with authenticated
+passthrough, method/tool allowlist, health/readiness endpoints, and read-only
+feature-store enrichment of `find_candidates` (the 21 PR-#537 fields). Not yet
+deployed; Docker/Arcane packaging and the Hermes-side configuration follow.
+
+Design decision and verified data paths are documented in the operator's
+decision log (`mcp_gateway` section) and on the shared knowledge base.
+
+## Endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /mcp/` | Authenticated JSON-RPC passthrough (Streamable HTTP). `tools/list` is allowlist-filtered, `tools/call` guarded, `watchlist_add` excluded by default. Backend outages answer with JSON-RPC `-32000` (protocol stays intact). |
+| `GET /healthz` | Liveness only — deliberately **no** backend/database call, so a restarted screener backend cannot flip the container unhealthy. |
+| `GET /readyz` | Readiness with real probes: backend `tools/list` +, when SQL enrichment is configured, a database ping. Returns 503 + reasons when degraded. |
+
+## Configuration (environment)
+
+| Variable | Meaning |
+|---|---|
+| `GATEWAY_TOKEN` | Token clients must present (`Authorization: Bearer ...` or `x-gateway-token`). Fail fast when missing. |
+| `XANG_BACKEND_TOKEN` | The backend MCP bearer secret (`SERVER_AUTH_PASSWORD` value). Stays inside the gateway process. |
+| `XANG_MCP_URL` | Backend endpoint; default `http://xang1234-backend-1:8000/mcp/` — always normalised to a trailing slash (the bare path only redirects). |
+| `XANG_DB_DSN` | Read-only Postgres DSN for the feature store; unset = enrichment disabled (responses pass through unchanged, no markers). |
+| `GATEWAY_EXCLUDED_TOOLS` | Comma-separated tool exclusions; default `watchlist_add`. |
+| `GATEWAY_REQUEST_TIMEOUT` | Per-request backend timeout in seconds (default 120). |
+| `GATEWAY_HOST` / `GATEWAY_PORT` | Bind address for `python -m xang_mcp_gateway` (default `127.0.0.1:9160`). |
 
 ## Development
 
