@@ -166,8 +166,9 @@ def create_app(
             visible = [name for name in backend_tools if name in settings.allowed_tools]
             # A JSON-RPC error body arrives with HTTP 200: only a dictionary result
             # counts as a successful probe (readiness, not status-code guessing).
+            # A tools/list probe without a list-shaped tools block is also broken.
             checks["backend_mcp"] = {
-                "ok": status == 200 and isinstance(jsonrpc_result, dict),
+                "ok": status == 200 and isinstance(jsonrpc_result, dict) and isinstance(tools, list),
                 "tools_visible": len(visible),
             }
         except BackendUnavailable as exc:

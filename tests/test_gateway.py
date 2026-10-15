@@ -215,3 +215,11 @@ class TestHealthEndpoints:
         assert body["status"] == "degraded"
         assert body["checks"]["backend_mcp"]["ok"] is False
         assert body["checks"]["backend_mcp"]["tools_visible"] == 0
+
+    def test_readyz_degrades_when_tools_block_missing_from_result(self) -> None:
+        """CodeRabbit round 3: a dict result without list-shaped tools is false-ready."""
+        transport = FakeTransport([(200, {"jsonrpc": "2.0", "id": "readyz", "result": {}})])
+        resp = make_client(transport).get("/readyz")
+        assert resp.status_code == 503
+        assert resp.json()["checks"]["backend_mcp"]["ok"] is False
+        assert resp.json()["checks"]["backend_mcp"]["tools_visible"] == 0
