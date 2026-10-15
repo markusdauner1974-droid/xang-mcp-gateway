@@ -258,6 +258,25 @@ class TestResponseEnrichment:
         assert client.post("/mcp/", json=find_candidates_call(["NVDA"]), headers=AUTH).status_code == 200
         assert provider.requested == [(["NVDA"], 21)]
 
+    def test_list_shaped_text_mirror_does_not_crash(self, sample_facts: dict[str, dict[str, Any]]) -> None:
+        """CodeRabbit finding: a parsed-but-non-dict text mirror must not raise."""
+        provider = FakeFactsProvider(facts=sample_facts)
+        envelope = candidate_envelope(["NVDA"])
+        envelope.pop("run")  # skip path: markers would be attempted on both copies
+        backend = {
+            "result": {
+                "content": [{"type": "text", "text": json.dumps([1, 2, 3])}],  # valid JSON, but a list
+                "structuredContent": envelope,
+            }
+        }
+        transport = FakeTransport([(200, backend)])
+        client = make_client(transport, provider=provider)
+        resp = client.post("/mcp/", json=find_candidates_call(["NVDA"]), headers=AUTH)
+        assert resp.status_code == 200
+        structured = resp.json()["result"]["structuredContent"]
+        assert structured["gateway"]["enrichment"] == "skipped"
+        assert json.loads(resp.json()["result"]["content"][0]["text"]) == [1, 2, 3]  # untouched
+
     def test_enrichment_disabled_leaves_response_absolutely_untouched(self) -> None:
         envelope = candidate_envelope(["NVDA"])
         backend = candidates_result_payload(envelope)

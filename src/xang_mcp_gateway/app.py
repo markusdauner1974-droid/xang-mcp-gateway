@@ -93,7 +93,7 @@ async def _enrich_result(result: dict[str, Any], provider: FactsProvider) -> Non
         skip = _marker("skipped", reason="response run id missing or invalid")
         if isinstance(structured, dict):
             _apply_marker(structured, skip)
-        if text_target is not None and text_entry is not None:
+        if isinstance(text_target, dict) and text_entry is not None:
             _apply_marker(text_target, skip)
             text_entry["text"] = json.dumps(text_target, ensure_ascii=False)
         return
@@ -105,7 +105,7 @@ async def _enrich_result(result: dict[str, Any], provider: FactsProvider) -> Non
         failure = _marker("unavailable", reason="feature-store read failed")
         if isinstance(structured, dict):
             _apply_marker(structured, failure)
-        if text_target is not None and text_entry is not None:
+        if isinstance(text_target, dict) and text_entry is not None:
             _apply_marker(text_target, failure)
             text_entry["text"] = json.dumps(text_target, ensure_ascii=False)
         return
