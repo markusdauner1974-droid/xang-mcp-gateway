@@ -5,6 +5,8 @@ Streamable HTTP, later plus candidate-fact enrichment (PR #537 field set) read
 read-only from the feature store. See README for architecture and security posture.
 """
 
+from .config import GatewayConfigError, GatewaySettings
+
 __version__ = "0.1.0"
 
-__all__ = ["__version__"]
+__all__ = ["__version__", "GatewayConfigError", "GatewaySettings"]
