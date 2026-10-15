@@ -1,15 +1,18 @@
 """FastAPI application: MCP passthrough gateway with allowlist and enrichment.
 
 Endpoint contract:
-- POST /mcp/ — authenticated JSON-RPC passthrough (Streamable HTTP). Auth
-  failures are HTTP 401; malformed JSON-RPC keeps HTTP 200 with a JSON-RPC
-  error envelope (mirrors the backend's transport behavior). Backend outages
-  answer with JSON-RPC -32000 instead of tearing down the protocol surface.
+- POST /mcp/ — authenticated JSON-RPC (Streamable HTTP). Auth failures are
+  HTTP 401; malformed JSON-RPC keeps HTTP 200 with a JSON-RPC error envelope
+  (mirrors the backend's transport behavior). Backend outages answer with
+  JSON-RPC -32000 instead of tearing down the protocol surface.
 - GET /healthz — local liveness only, NO backend call (a coupled healthcheck
   would mark the container unhealthy whenever the screener backend restarts;
   same rationale as the paperbroker phase-5 judge decision).
 - GET /readyz — active readiness: backend tools/list probe plus, when SQL
   enrichment is configured, a database ping.
+
+Phase 7 addition: `market_calendar_status` is a LOCAL tool (no backend round
+trip) that surfaces canonical XANG calendar facts read-only; see calendar.py.
 """
 
 from __future__ import annotations
@@ -25,6 +28,11 @@ from fastapi.responses import JSONResponse, Response
 import xang_mcp_gateway as _pkg
 
 from . import auth as auth_module
+from .calendar import (
+    CALENDAR_TOOL_DESCRIPTOR,
+    CALENDAR_TOOL_NAME,
+    calendar_jsonrpc_result,
+)
 from .config import ALLOWED_METHODS, GatewaySettings
 from .enrichment import ENRICHMENT_FIELD_COUNT, FactsProvider, SqlFeatureStore, enrich_target
 from .rpc import (
@@ -225,6 +233,22 @@ def create_app(
                     )
                 )
 
+        if method == "tools/call" and tool_name == CALENDAR_TOOL_NAME:
+            # Phase 7: local canonical-calendar tool — answered here, WITHOUT a
+            # backend round trip. All failure modes answer explicit error
+            # envelopes (fail closed); see calendar.py for the contract.
+            args = params.get("arguments") if isinstance(params, dict) else None
+            market = args.get("market", "US") if isinstance(args, dict) else "US"
+            if not isinstance(market, str) or not market.strip():
+                return JSONResponse(
+                    content=error_response(
+                        request_id, INVALID_PARAMS, "Invalid params: market must be a non-empty string"
+                    )
+                )
+            return JSONResponse(
+                content=calendar_jsonrpc_result(request_id, market.strip(), settings.calendar_app_root)
+            )
+
         try:
             status, payload = await transport.post_jsonrpc(body)
         except BackendUnavailable as exc:
@@ -239,11 +263,15 @@ def create_app(
         if isinstance(result, dict) and method == "tools/list":
             tools = result.get("tools")
             if isinstance(tools, list):
-                result["tools"] = [
+                filtered = [
                     tool
                     for tool in tools
                     if isinstance(tool, dict) and tool.get("name") in settings.allowed_tools
                 ]
+                # Phase 7: advertise the local calendar tool alongside the
+                # backend passthrough tools.
+                filtered.append(CALENDAR_TOOL_DESCRIPTOR)
+                result["tools"] = filtered
         if (
             facts_provider is not None
             and method == "tools/call"

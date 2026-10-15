@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from xang_mcp_gateway import __version__
 from xang_mcp_gateway.app import create_app
+from xang_mcp_gateway.calendar import CALENDAR_TOOL_NAME
 from xang_mcp_gateway.config import ALL_BACKEND_TOOLS
 from xang_mcp_gateway.rpc import BackendUnavailable
 
@@ -64,8 +65,9 @@ class TestAllowlist:
         assert resp.status_code == 200
         body = resp.json()
         names = [tool["name"] for tool in body["result"]["tools"]]
-        assert len(names) == 12
+        assert len(names) == 12 + 1  # backend passthrough tools + local calendar tool
         assert "watchlist_add" not in names
+        assert CALENDAR_TOOL_NAME in names, "Phase 7: local tool must be advertised"
         assert "stock_snapshot" in names and "find_candidates" in names
         # id passthrough preserved
         assert body["id"] == 11
@@ -186,7 +188,7 @@ class TestHealthEndpoints:
         resp = make_client(transport).get("/healthz")
         assert resp.status_code == 200
         body = resp.json()
-        assert body == {"status": "ok", "version": __version__, "enrichment": "disabled", "tools_visible": 12}
+        assert body == {"status": "ok", "version": __version__, "enrichment": "disabled", "tools_visible": 12 + 1}
         assert auth_untouched(transport)
 
     def test_readyz_reports_backend_when_reachable(self) -> None:

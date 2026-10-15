@@ -52,6 +52,13 @@ ALLOWED_METHODS: frozenset[str] = frozenset(
 # Tools whose responses may be enriched with feature-store facts.
 ENRICHABLE_TOOLS: frozenset[str] = frozenset({"find_candidates"})
 
+# Phase 7: local (non-passthrough) tools served by the gateway itself.
+# market_calendar_status exposes CANONICAL xang calendar facts (read-only);
+# the weekend/holiday judgment never lives in this codebase — see calendar.py.
+LOCAL_TOOLS: frozenset[str] = frozenset({"market_calendar_status"})
+
+DEFAULT_CALENDAR_APP_ROOT = "/opt/xang_backend"
+
 
 @dataclass(frozen=True)
 class GatewaySettings:
@@ -63,6 +70,7 @@ class GatewaySettings:
     excluded_tools: frozenset[str] = DEFAULT_EXCLUDED_TOOLS
     request_timeout_seconds: float = 120.0
     db_dsn: str | None = None
+    calendar_app_root: str = DEFAULT_CALENDAR_APP_ROOT
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.request_timeout_seconds) or self.request_timeout_seconds <= 0:
@@ -85,8 +93,14 @@ class GatewaySettings:
             raise GatewayConfigError("gateway_token must differ from backend_token")
 
     @property
-    def allowed_tools(self) -> frozenset[str]:
+    def backend_visible_tools(self) -> frozenset[str]:
         return ALL_BACKEND_TOOLS - self.excluded_tools
+
+    @property
+    def allowed_tools(self) -> frozenset[str]:
+        # Local tools are served by the gateway itself and participate in the
+        # same allowlist surface (tools/list + tools/call gating).
+        return (ALL_BACKEND_TOOLS - self.excluded_tools) | LOCAL_TOOLS
 
     @property
     def enrichment_enabled(self) -> bool:
@@ -110,6 +124,9 @@ class GatewaySettings:
             excluded_tools=excluded,
             request_timeout_seconds=_parse_timeout(source.get("GATEWAY_REQUEST_TIMEOUT", "120")),
             db_dsn=source.get("XANG_DB_DSN") or None,
+            calendar_app_root=source.get(
+                "XANG_CALENDAR_BACKEND_APP_ROOT", DEFAULT_CALENDAR_APP_ROOT
+            ),
         )
 
 

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "xang-mcp-gateway"
 version = "0.1.0"
-description = "Standalone MCP gateway for the xang1234 stock-screener stack (tool passthrough + candidate-fact enrichment)"
+description = "Standalone MCP gateway for the xang1234 stock-screener stack (tool passthrough + candidate-fact enrichment + canonical calendar facts)"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -13,6 +13,17 @@ dependencies = [
     "uvicorn>=0.30",
     "httpx>=0.27",
     "psycopg[binary]>=3.2",
+    # Phase 7: canonical XANG calendar service dependencies. The backend image
+    # runs pandas==2.2.0 + exchange_calendars==4.11.1 (live-verified 2026-10-15).
+    # exchange-calendars is pinned EXACTLY: 4.13.x changed post-close semantics
+    # of last_completed_trading_day (measured live). pandas stays in the 2.2.x
+    # range (2.2.0 has no CPython 3.13 wheels; wheel availability needs >=2.2.3).
+    "pandas>=2.2.0,<2.3",
+    "exchange-calendars==4.11.1",
+    "tzdata>=2024.1",
+    # Imported transitively by the canonical backend tree (app.config.settings);
+    # redis stays OPTIONAL by design (backend import guard → non-Redis path).
+    "pydantic-settings>=2.0",
 ]
 
 [project.optional-dependencies]
