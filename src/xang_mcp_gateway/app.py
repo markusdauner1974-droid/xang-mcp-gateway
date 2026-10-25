@@ -266,8 +266,18 @@ def create_app(
                         request_id, INVALID_PARAMS, "Invalid params: symbol must be a non-empty string"
                     )
                 )
+            # The lookup is synchronous by nature (psycopg). Running it on the
+            # event loop would freeze every other request - including /healthz -
+            # for the duration of a TCP timeout, so it goes to a worker thread
+            # (same pattern as the enrichment and calendar calls).
             return JSONResponse(
-                content=earnings_jsonrpc_result(request_id, symbol, settings.db_dsn)
+                content=await asyncio.to_thread(
+                    earnings_jsonrpc_result,
+                    request_id,
+                    symbol,
+                    settings.db_dsn,
+                    backend_app_root=settings.calendar_app_root,
+                )
             )
 
         try:

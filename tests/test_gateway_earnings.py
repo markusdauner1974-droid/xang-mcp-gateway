@@ -376,6 +376,140 @@ class TestCanonicalReuse:
             assert result["freshness_status"] == expected, age
 
 
+class TestEventLoopHygiene:
+    """Kody findings 1 and 2: a blocking lookup must not freeze the gateway."""
+
+    def test_the_route_passes_the_configured_backend_root(self) -> None:
+        seen: dict[str, Any] = {}
+
+        def fake(request_id: Any, symbol: Any, dsn: Any, **kwargs: Any) -> dict[str, Any]:
+            seen["symbol"] = symbol
+            seen.update(kwargs)
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"structuredContent": {}}}
+
+        original = app_module.earnings_jsonrpc_result
+        app_module.earnings_jsonrpc_result = fake
+        try:
+            app = app_module.create_app(
+                make_settings(calendar_app_root="/srv/xang-backend"), transport=FakeTransport()
+            )
+            TestClient(app).post(
+                "/mcp/",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 21,
+                    "method": "tools/call",
+                    "params": {"name": EARNINGS_TOOL_NAME, "arguments": {"symbol": "AAPL"}},
+                },
+                headers=AUTH,
+            )
+        finally:
+            app_module.earnings_jsonrpc_result = original
+        assert seen["symbol"] == "AAPL"
+        assert seen["backend_app_root"] == "/srv/xang-backend", "XANG_CALENDAR_BACKEND_APP_ROOT must reach the tool"
+
+    def test_a_slow_lookup_does_not_block_healthz(self) -> None:
+        import threading
+        import time
+
+        def slow(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            time.sleep(0.8)
+            return {"jsonrpc": "2.0", "id": 1, "result": {"structuredContent": {}}}
+
+        original = app_module.earnings_jsonrpc_result
+        app_module.earnings_jsonrpc_result = slow
+        try:
+            app = app_module.create_app(make_settings(), transport=FakeTransport())
+            client = TestClient(app)
+            worker = threading.Thread(
+                target=lambda: client.post(
+                    "/mcp/",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 22,
+                        "method": "tools/call",
+                        "params": {"name": EARNINGS_TOOL_NAME, "arguments": {"symbol": "AAPL"}},
+                    },
+                    headers=AUTH,
+                )
+            )
+            worker.start()
+            time.sleep(0.1)
+            started = time.perf_counter()
+            health = client.get("/healthz")
+            elapsed = time.perf_counter() - started
+            worker.join()
+        finally:
+            app_module.earnings_jsonrpc_result = original
+        assert health.status_code == 200
+        assert elapsed < 0.4, f"/healthz waited {elapsed:.2f}s behind a blocking lookup"
+
+    def test_the_connection_is_closed_by_the_context_manager(self) -> None:
+        # psycopg 3 closes on __exit__ (Connection.__exit__ -> self.close()),
+        # so `with conn:` is not just a transaction scope.
+        factory, created = _store(_observe(1, "2026-11-02"))
+        with _injected(StubRules()):
+            earnings_facts("AAPL", "postgresql://x@h/db", reference_date=TODAY,
+                           backend_app_root="/nonexistent", connect_factory=factory)
+        assert created[0].closed is True
+
+
+class TestConnectTimeout:
+    def test_psycopg_gets_a_connect_timeout(self) -> None:
+        import psycopg
+
+        captured: dict[str, Any] = {}
+        real_connect = psycopg.connect
+
+        def fake_connect(dsn: str, **kwargs: Any) -> Any:
+            captured["dsn"] = dsn
+            captured.update(kwargs)
+            raise RuntimeError("stop here")  # do not dial anything
+
+        psycopg.connect = fake_connect
+        try:
+            with _injected(StubRules()):
+                result = earnings_facts("AAPL", "postgresql://x@h/db", reference_date=TODAY,
+                                        backend_app_root="/nonexistent")
+        finally:
+            psycopg.connect = real_connect
+        assert captured["connect_timeout"] == 5
+        assert result["freshness_status"] == "unknown"
+        assert result["reasons"] == ["database_unavailable"]
+
+
+class TestCanonicalDrift:
+    def test_a_broken_rules_object_fails_closed(self) -> None:
+        class DriftingRules:
+            """A canonical module that stopped exposing its constants."""
+
+            EVENT_CALENDAR_PRODUCER_REFRESH_AFTER_DAYS = 7
+
+            def __getattr__(self, name: str) -> Any:
+                raise AttributeError(f"backend drift: {name}")
+
+        factory, created = _store(_observe(1, "2026-11-02"))
+        with _injected(DriftingRules()):
+            result = earnings_facts("AAPL", "postgresql://x@h/db", reference_date=TODAY,
+                                    backend_app_root="/nonexistent", connect_factory=factory)
+        assert result["freshness_status"] == "invalid"
+        assert result["reasons"] == ["freshness_rules_unavailable"]
+        assert result["available"] is False
+        assert created == [], "a broken rulebook must not reach the database"
+
+    def test_a_raising_predicate_fails_closed(self) -> None:
+        class RaisingRules(StubRules):
+            def is_event_calendar_observation_fresh(self, *a: Any, **k: Any) -> bool:
+                raise ValueError("canonical signature changed")
+
+        factory, _ = _store(_observe(1, "2026-11-02"))
+        with _injected(RaisingRules()):
+            result = earnings_facts("AAPL", "postgresql://x@h/db", reference_date=TODAY,
+                                    backend_app_root="/nonexistent", connect_factory=factory)
+        assert result["freshness_status"] == "invalid"
+        assert result["reasons"] == ["freshness_rules_unavailable"]
+
+
 class TestRoute:
     def _client(self, transport: FakeTransport | None = None, **settings_kwargs: Any) -> TestClient:
         transport = transport or FakeTransport()

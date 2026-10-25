@@ -36,6 +36,9 @@ logger = logging.getLogger("xang_mcp_gateway.earnings")
 
 EARNINGS_TOOL_NAME = "earnings_lookup"
 EARNINGS_SOURCE = "xang_yahoo_calendar"
+# A gateway must not hang on a dead database. Five seconds is longer than any
+# healthy handshake in the stack and far shorter than an operator's patience.
+CONNECT_TIMEOUT_SECONDS = 5
 DEFAULT_BACKEND_APP_ROOT = "/opt/xang_backend"
 
 # Symbols accepted by the lookup. XANG trades US listings: letters, digits, and
@@ -128,7 +131,7 @@ def _fetch_row(symbol: str, dsn: str, connect_factory: Any = None) -> dict[str, 
     else:
         import psycopg
 
-        conn = psycopg.connect(dsn)
+        conn = psycopg.connect(dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS)
     with conn:
         # Belt and suspenders: a SELECT cannot write, but a read-only
         # transaction also stops a compromised DSN from doing anything else.
@@ -203,6 +206,34 @@ def earnings_facts(
         envelope["reasons"].append("freshness_rules_unavailable")
         return envelope
 
+    # Everything below reads the canonical module. A drifted or half-imported
+    # tree must not turn into a 500: it answers like an unusable rulebook.
+    try:
+        return _assess_with_rules(
+            envelope,
+            rules,
+            symbol=normalized,
+            dsn=dsn,
+            reference_date=reference_date,
+            connect_factory=connect_factory,
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed on canonical drift
+        logger.warning("earnings rules failed for %s: %s", normalized, type(exc).__name__)
+        envelope["freshness_status"] = "invalid"
+        envelope["reasons"] = ["freshness_rules_unavailable"]
+        return envelope
+
+
+def _assess_with_rules(
+    envelope: dict[str, Any],
+    rules: Any,
+    *,
+    symbol: str,
+    dsn: str,
+    reference_date: date | None,
+    connect_factory: Any,
+) -> dict[str, Any]:
+    """Body that depends on the canonical module (guarded by the caller)."""
     envelope["event_calendar_max_age_days"] = rules.EVENT_CALENDAR_MAX_AGE_DAYS
     envelope["event_calendar_producer_refresh_after_days"] = (
         rules.EVENT_CALENDAR_PRODUCER_REFRESH_AFTER_DAYS
@@ -212,9 +243,9 @@ def earnings_facts(
     )
 
     try:
-        row = _fetch_row(normalized, dsn, connect_factory)
+        row = _fetch_row(symbol, dsn, connect_factory)
     except Exception as exc:  # noqa: BLE001 - fail closed on every driver error
-        logger.warning("earnings lookup failed for %s: %s", normalized, type(exc).__name__)
+        logger.warning("earnings lookup failed for %s: %s", symbol, type(exc).__name__)
         envelope["reasons"].append("database_unavailable")
         return envelope
 
