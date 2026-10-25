@@ -50,7 +50,7 @@ def test_allowed_tools_excludes_default_write_tool() -> None:
         (ALL_BACKEND_TOOLS - DEFAULT_EXCLUDED_TOOLS) | LOCAL_TOOLS
     )
     assert "watchlist_add" not in settings.allowed_tools
-    assert len(settings.allowed_tools) == 12 + 1
+    assert len(settings.allowed_tools) == 12 + len(LOCAL_TOOLS)
 
 
 def test_custom_exclusion_list() -> None:

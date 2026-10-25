@@ -55,7 +55,10 @@ ENRICHABLE_TOOLS: frozenset[str] = frozenset({"find_candidates"})
 # Phase 7: local (non-passthrough) tools served by the gateway itself.
 # market_calendar_status exposes CANONICAL xang calendar facts (read-only);
 # the weekend/holiday judgment never lives in this codebase — see calendar.py.
-LOCAL_TOOLS: frozenset[str] = frozenset({"market_calendar_status"})
+# Phase 8: ``earnings_lookup`` reads the stored Yahoo calendar observation
+# (read-only, one parameterised SELECT) and reuses the canonical freshness
+# module from the backend tree - see earnings.py.
+LOCAL_TOOLS: frozenset[str] = frozenset({"market_calendar_status", "earnings_lookup"})
 
 DEFAULT_CALENDAR_APP_ROOT = "/opt/xang_backend"
 

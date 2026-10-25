@@ -93,11 +93,11 @@ class TestLocalSurface:
         # backend surface unchanged (13 minus watchlist_add)
         assert settings.backend_visible_tools == ALL_BACKEND_TOOLS - DEFAULT_EXCLUDED_TOOLS
 
-    def test_healthz_reports_13_visible_tools(self) -> None:
+    def test_healthz_reports_the_visible_tool_count(self) -> None:
         transport = FakeTransport()
         resp = make_client(transport).get("/healthz")
         assert resp.status_code == 200
-        assert resp.json()["tools_visible"] == len(ALL_BACKEND_TOOLS - DEFAULT_EXCLUDED_TOOLS) + 1
+        assert resp.json()["tools_visible"] == len(ALL_BACKEND_TOOLS - DEFAULT_EXCLUDED_TOOLS) + len(LOCAL_TOOLS)
 
     def test_tools_list_advertises_calendar_tool(self) -> None:
         transport = FakeTransport([(200, backend_tools_payload())])
@@ -106,7 +106,7 @@ class TestLocalSurface:
         )
         assert resp.status_code == 200
         names = [tool["name"] for tool in resp.json()["result"]["tools"]]
-        assert len(names) == 12 + 1
+        assert len(names) == 12 + len(LOCAL_TOOLS)
         assert CALENDAR_TOOL_NAME in names
         assert "watchlist_add" not in names
         descriptor = next(t for t in resp.json()["result"]["tools"] if t["name"] == CALENDAR_TOOL_NAME)
