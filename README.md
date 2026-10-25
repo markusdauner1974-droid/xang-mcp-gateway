@@ -103,7 +103,7 @@ implementation as the live backend. The suite covers the Saturday case
 Deployed and live since 2026-10-15 (Arcane, container `xang-mcp-gateway`,
 LAN `192.168.178.10:9160`). Phase 5+6 (packaging + Hermes-side registration,
 13+12 MCP tools) are complete; Phase 7 adds the local `market_calendar_status`
-tool.
+tool, Phase 8 the local `earnings_lookup` tool.
 
 Design decision and verified data paths are documented in the operator's
 decision log (`mcp_gateway` section) and on the shared knowledge base.
@@ -132,6 +132,19 @@ decision log (`mcp_gateway` section) and on the shared knowledge base.
   error envelope (`calendar_status: "error"`, `expected_trading_date: null`);
   no dates are ever guessed. Hermes decides fresh/stale deterministically; the
   gateway does not.
+- **Local (Phase 8):** `earnings_lookup` — one read-only, parameterised
+  `SELECT` on `public.stock_fundamentals` (`symbol`, `next_earnings_date`,
+  `event_calendar_as_of_date`) answered by the gateway itself. Returns
+  `freshness_status` (`ok`/`stale`/`unknown`/`invalid`), `available`,
+  `date_confirmation` and machine-readable `reasons`. The freshness window is
+  **not** reimplemented: the canonical
+  `app.services.yahoo_earnings_calendar` from the backend tree decides
+  (14-day observation age, 7-day producer refresh, 3-day future tolerance) and
+  the answer repeats the thresholds it actually used. A missing row, a missing
+  observation date or a database error stays missing and blocks `available`. `date_confirmation` is
+  `unknown` — the table records no confirmation proof, so `confirmed` is never
+  claimed. `XANG_DB_DSN` is required; without it the tool answers
+  `database_not_configured`.
 
 ## Configuration (environment)
 
@@ -140,7 +153,7 @@ decision log (`mcp_gateway` section) and on the shared knowledge base.
 | `GATEWAY_TOKEN` | Token clients must present (`Authorization: Bearer ***` or `x-gateway-token`). Fail fast when missing. |
 | `XANG_BACKEND_TOKEN` | The backend MCP bearer secret (`SERVER_AUTH_PASSWORD` value). Stays inside the gateway process. |
 | `XANG_MCP_URL` | Backend endpoint; default `http://xang1234-backend-1:8000/mcp/` — always normalised to a trailing slash (the bare path only redirects). |
-| `XANG_DB_DSN` | Read-only Postgres DSN for the feature store; unset = enrichment disabled (responses pass through unchanged, no markers). |
+| `XANG_DB_DSN` | Read-only Postgres DSN for the feature store; unset = enrichment disabled (responses pass through unchanged, no markers) **and** `earnings_lookup` answers `database_not_configured`. |
 | `GATEWAY_EXCLUDED_TOOLS` | Comma-separated tool exclusions; default `watchlist_add`. |
 | `GATEWAY_REQUEST_TIMEOUT` | Per-request backend timeout in seconds (default 120). |
 | `XANG_CALENDAR_BACKEND_APP_ROOT` | Root of the canonical backend source tree used by the calendar tool. Image default `/opt/xang_backend` (copied from the pinned backend image at build time). |

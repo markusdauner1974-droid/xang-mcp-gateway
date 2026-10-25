@@ -34,6 +34,11 @@ from .calendar import (
     calendar_jsonrpc_result,
 )
 from .config import ALLOWED_METHODS, GatewaySettings
+from .earnings import (
+    EARNINGS_TOOL_DESCRIPTOR,
+    EARNINGS_TOOL_NAME,
+    earnings_jsonrpc_result,
+)
 from .enrichment import ENRICHMENT_FIELD_COUNT, FactsProvider, SqlFeatureStore, enrich_target
 from .rpc import (
     GATEWAY_DOWNSTREAM_ERROR,
@@ -249,6 +254,32 @@ def create_app(
                 content=calendar_jsonrpc_result(request_id, market.strip(), settings.calendar_app_root)
             )
 
+        if method == "tools/call" and tool_name == EARNINGS_TOOL_NAME:
+            # Phase 8: local earnings tool - one read-only SELECT, no backend
+            # round trip. Contract-level failures (missing symbol argument)
+            # are JSON-RPC errors; data-level ones are answered as facts.
+            args = params.get("arguments") if isinstance(params, dict) else None
+            symbol = args.get("symbol") if isinstance(args, dict) else None
+            if not isinstance(symbol, str) or not symbol.strip():
+                return JSONResponse(
+                    content=error_response(
+                        request_id, INVALID_PARAMS, "Invalid params: symbol must be a non-empty string"
+                    )
+                )
+            # The lookup is synchronous by nature (psycopg). Running it on the
+            # event loop would freeze every other request - including /healthz -
+            # for the duration of a TCP timeout, so it goes to a worker thread
+            # (same pattern as the enrichment and calendar calls).
+            return JSONResponse(
+                content=await asyncio.to_thread(
+                    earnings_jsonrpc_result,
+                    request_id,
+                    symbol,
+                    settings.db_dsn,
+                    backend_app_root=settings.calendar_app_root,
+                )
+            )
+
         try:
             status, payload = await transport.post_jsonrpc(body)
         except BackendUnavailable as exc:
@@ -271,6 +302,8 @@ def create_app(
                 # Phase 7: advertise the local calendar tool alongside the
                 # backend passthrough tools.
                 filtered.append(CALENDAR_TOOL_DESCRIPTOR)
+                # Phase 8: and the local earnings tool.
+                filtered.append(EARNINGS_TOOL_DESCRIPTOR)
                 result["tools"] = filtered
         if (
             facts_provider is not None
