@@ -7,13 +7,14 @@ application.
 
 ## Why this exists
 
-1. **Upstream bridge.** The candidate-fact extension lives in an open upstream PR
+1. **Upstream compatibility.** The candidate-fact extension was merged upstream in PR
    ([xang1234/stock-screener#537](https://github.com/xang1234/stock-screener/pull/537),
-   *"Expose canonical setup and screening facts via MCP"*) that has been waiting for
-   maintainer attention since 2026-10-05. Until it merges, this gateway enriches the
-   MCP responses with the same field set from the already-persisted feature store —
-   no recomputation, no upstream changes. When the PR merges, the enrichment is
-   removed and the gateway stays as the auth/proxy layer ("slimming").
+   *"Expose canonical setup and screening facts via MCP"*). After deploying that
+   backend version, clients can consume the canonical fields directly. Set
+   GATEWAY_CANDIDATE_ENRICHMENT=false to stop the candidate SQL reads and pass the
+   upstream payload through unchanged. The default remains true for existing
+   clients that require the legacy enrichment marker. The gateway continues as
+   the auth/proxy layer and serves its independent local tools.
 2. **Separated authentication.** The backend MCP endpoint is protected by
    `SERVER_AUTH_PASSWORD` — the same single-user secret as the web UI login. This
    gateway carries that secret internally and issues its own client token, so MCP
@@ -154,10 +155,30 @@ decision log (`mcp_gateway` section) and on the shared knowledge base.
 | `XANG_BACKEND_TOKEN` | The backend MCP bearer secret (`SERVER_AUTH_PASSWORD` value). Stays inside the gateway process. |
 | `XANG_MCP_URL` | Backend endpoint; default `http://xang1234-backend-1:8000/mcp/` — always normalised to a trailing slash (the bare path only redirects). |
 | `XANG_DB_DSN` | Read-only Postgres DSN for the feature store; unset = enrichment disabled (responses pass through unchanged, no markers) **and** `earnings_lookup` answers `database_not_configured`. |
+| `GATEWAY_CANDIDATE_ENRICHMENT` | Strict boolean `true`/`false`, default `true`. Set `false` after upstream/client migration to disable candidate enrichment while retaining `XANG_DB_DSN` for earnings. Invalid values fail at startup. |
 | `GATEWAY_EXCLUDED_TOOLS` | Comma-separated tool exclusions; default `watchlist_add`. |
 | `GATEWAY_REQUEST_TIMEOUT` | Per-request backend timeout in seconds (default 120). |
 | `XANG_CALENDAR_BACKEND_APP_ROOT` | Root of the canonical backend source tree used by the calendar tool. Image default `/opt/xang_backend` (copied from the pinned backend image at build time). |
 | `GATEWAY_HOST` / `GATEWAY_PORT` | Bind address for `python -m xang_mcp_gateway` (default `127.0.0.1:9160`). |
+
+## Migrating to official candidate facts
+
+1. Deploy a backend containing PR #537 and compare its candidate facts with the
+   current gateway for the same published run. Missing fields and null values
+   must remain distinguishable; no rating translation is part of this migration.
+2. Prepare clients to validate the official candidate schema without requiring
+   the legacy gateway enrichment marker.
+3. Set GATEWAY_CANDIDATE_ENRICHMENT=false in the Arcane environment and redeploy
+   the gateway. Keep XANG_DB_DSN configured when earnings_lookup is used.
+4. Verify candidate passthrough, local calendar/earnings tools, authentication,
+   and the write-tool exclusion before resuming client jobs.
+
+With candidate enrichment disabled, no candidate FactsProvider is constructed or
+called, including providers supplied directly to create_app. Candidate fields,
+nulls, ratings and upstream tool errors pass through unchanged; no gateway marker
+is added. Health reports enrichment=disabled, and readiness skips the candidate
+feature-store ping. Earnings still uses its own DSN and reports its own failures.
+The calendar implementation and backend authentication are unchanged.
 
 ## Development
 

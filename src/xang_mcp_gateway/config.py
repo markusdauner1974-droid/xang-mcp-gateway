@@ -74,8 +74,11 @@ class GatewaySettings:
     request_timeout_seconds: float = 120.0
     db_dsn: str | None = None
     calendar_app_root: str = DEFAULT_CALENDAR_APP_ROOT
+    candidate_enrichment: bool = True
 
     def __post_init__(self) -> None:
+        if type(self.candidate_enrichment) is not bool:
+            raise GatewayConfigError("candidate_enrichment must be a boolean")
         if not math.isfinite(self.request_timeout_seconds) or self.request_timeout_seconds <= 0:
             raise GatewayConfigError("request_timeout_seconds must be a finite positive number")
         url = self.backend_mcp_url.strip()
@@ -107,7 +110,7 @@ class GatewaySettings:
 
     @property
     def enrichment_enabled(self) -> bool:
-        return bool(self.db_dsn)
+        return self.candidate_enrichment and bool(self.db_dsn)
 
     @property
     def enrichable_tools(self) -> frozenset[str]:
@@ -127,10 +130,19 @@ class GatewaySettings:
             excluded_tools=excluded,
             request_timeout_seconds=_parse_timeout(source.get("GATEWAY_REQUEST_TIMEOUT", "120")),
             db_dsn=source.get("XANG_DB_DSN") or None,
+            candidate_enrichment=_parse_candidate_enrichment(
+                source.get("GATEWAY_CANDIDATE_ENRICHMENT", "true")
+            ),
             calendar_app_root=source.get(
                 "XANG_CALENDAR_BACKEND_APP_ROOT", DEFAULT_CALENDAR_APP_ROOT
             ),
         )
+
+
+def _parse_candidate_enrichment(raw: str) -> bool:
+    if not isinstance(raw, str) or raw.strip().lower() not in {"true", "false"}:
+        raise GatewayConfigError("GATEWAY_CANDIDATE_ENRICHMENT must be true or false")
+    return raw.strip().lower() == "true"
 
 
 def _parse_timeout(raw: str) -> float:
