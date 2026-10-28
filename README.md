@@ -180,6 +180,11 @@ is added. Health reports enrichment=disabled, and readiness skips the candidate
 feature-store ping. Earnings still uses its own DSN and reports its own failures.
 The calendar implementation and backend authentication are unchanged.
 
+The earnings loader also verifies that its requested rule file exists and that
+the imported module belongs to that file. An already cached module from another
+backend tree cannot substitute for a missing or misconfigured rule source.
+Failures remain invalid/unavailable; no freshness thresholds are reimplemented.
+
 ## Development
 
 ```bash
