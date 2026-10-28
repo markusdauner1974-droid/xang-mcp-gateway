@@ -30,6 +30,7 @@ import os
 import re
 import sys
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("xang_mcp_gateway.earnings")
@@ -96,6 +97,11 @@ def _load_freshness_rules(backend_app_root: str) -> Any:
     root = backend_app_root.rstrip("/")
     if not root:
         raise ImportError("empty earnings backend app root")
+    root_path = Path(root).resolve()
+    expected_file = root_path / "app/services/yahoo_earnings_calendar.py"
+    if not expected_file.is_file():
+        raise ImportError("earnings rules missing from requested backend tree")
+    root = str(root_path)
     if root not in sys.path:
         sys.path.insert(0, root)
     os.environ.setdefault(
@@ -104,6 +110,9 @@ def _load_freshness_rules(backend_app_root: str) -> Any:
     )
     from app.services import yahoo_earnings_calendar
 
+    module_file = getattr(yahoo_earnings_calendar, "__file__", None)
+    if not module_file or Path(module_file).resolve() != expected_file.resolve():
+        raise ImportError("earnings rules loaded from a different backend tree")
     return yahoo_earnings_calendar
 
 

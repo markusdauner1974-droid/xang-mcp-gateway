@@ -145,7 +145,9 @@ def create_app(
         from .rpc import HttpxTransport
 
         transport = HttpxTransport(settings)
-    if facts_provider is None and settings.enrichment_enabled:
+    if not settings.candidate_enrichment:
+        facts_provider = None
+    elif facts_provider is None and settings.enrichment_enabled:
         facts_provider = SqlFeatureStore(settings.db_dsn)  # type: ignore[arg-type]
 
     app = FastAPI(title="XANG MCP Gateway", version=_pkg.__version__, docs_url=None, redoc_url=None)

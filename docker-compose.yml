@@ -26,6 +26,9 @@ services:
       GATEWAY_TOKEN: ${GATEWAY_TOKEN:?GATEWAY_TOKEN is required}
       XANG_BACKEND_TOKEN: ${XANG_BACKEND_TOKEN:?XANG_BACKEND_TOKEN is required}
       XANG_DB_DSN: ${XANG_DB_DSN:?XANG_DB_DSN is required}
+      # Disable candidate SQL enrichment after migrating clients to upstream facts.
+      # Keep XANG_DB_DSN configured for the independent earnings_lookup tool.
+      GATEWAY_CANDIDATE_ENRICHMENT: ${GATEWAY_CANDIDATE_ENRICHMENT:-true}
       # Backend endpoint (default = live stack, container-name reachable in md-netzwerk)
       XANG_MCP_URL: ${XANG_MCP_URL:-http://xang1234-backend-1:8000/mcp/}
       # The container must listen on all interfaces; exposure stays LAN-only
