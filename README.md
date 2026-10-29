@@ -204,6 +204,10 @@ In calendar-only mode:
   `/readyz` checks the canonical local calendar rather than backend MCP or SQL.
   Calendar errors retain the existing explicit error/null-date contract and make
   readiness HTTP 503; they never cause a guessed trading date.
+- `/readyz` stays unauthenticated so an orchestrator can probe it, so its verdict
+  is cached for 10 seconds and only one probe runs at a time: repeated calls cost
+  nothing, and a slow calendar cannot multiply into the worker pool that answers
+  `/mcp/`. A degraded verdict is cached the same way.
 
 Use the standalone [calendar compose template](docker-compose.calendar.yml)
 instead of the legacy proxy template, which still requires backend/SQL secrets.

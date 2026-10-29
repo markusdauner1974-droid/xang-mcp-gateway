@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
+
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -104,6 +108,76 @@ def test_canonical_payload_and_readiness_are_local(monkeypatch):
         assert ready.json()["checks"] == {"market_calendar": {"ok": True}}
     assert calls == [("US", settings.calendar_app_root)] * 2
     assert transport.calls == []
+
+
+def test_readyz_is_cached_between_probes(monkeypatch):
+    """The unauthenticated probe must not run the calendar on every call."""
+    calls = []
+
+    def calendar(request_id, market, root):
+        calls.append(market)
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"structuredContent": {
+            "expected_trading_date": "2026-10-29"}}}
+
+    monkeypatch.setattr(calendar_module, "calendar_jsonrpc_result", calendar)
+    with TestClient(app_module.create_app(make_settings(calendar_only=True))) as client:
+        for _ in range(5):
+            assert client.get("/readyz").status_code == 200
+    assert calls == ["US"]
+
+
+def test_readyz_probes_again_after_the_ttl(monkeypatch):
+    calls = []
+
+    def calendar(request_id, market, root):
+        calls.append(market)
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"structuredContent": {
+            "expected_trading_date": "2026-10-29"}}}
+
+    monkeypatch.setattr(calendar_module, "calendar_jsonrpc_result", calendar)
+    monkeypatch.setattr(calendar_module, "PROBE_TTL_SECONDS", 0.0)
+    with TestClient(app_module.create_app(make_settings(calendar_only=True))) as client:
+        assert client.get("/readyz").status_code == 200
+        assert client.get("/readyz").status_code == 200
+    assert calls == ["US", "US"]
+
+
+def test_a_degraded_verdict_is_cached_too(monkeypatch):
+    calls = []
+
+    def unavailable(request_id, market, root):
+        calls.append(market)
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"structuredContent": {
+            "calendar_status": "error", "expected_trading_date": None}}}
+
+    monkeypatch.setattr(calendar_module, "calendar_jsonrpc_result", unavailable)
+    with TestClient(app_module.create_app(make_settings(calendar_only=True))) as client:
+        for _ in range(3):
+            assert client.get("/readyz").status_code == 503
+    assert calls == ["US"]
+
+
+def test_concurrent_readyz_probes_run_the_calendar_once(monkeypatch):
+    """Single-flight: a burst of probes shares one calendar evaluation."""
+    calls = []
+
+    def slow_calendar(request_id, market, root):
+        calls.append(market)
+        time.sleep(0.05)
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"structuredContent": {
+            "expected_trading_date": "2026-10-29"}}}
+
+    monkeypatch.setattr(calendar_module, "calendar_jsonrpc_result", slow_calendar)
+    app = app_module.create_app(make_settings(calendar_only=True))
+
+    async def burst() -> list[int]:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            responses = await asyncio.gather(*(client.get("/readyz") for _ in range(6)))
+        return [response.status_code for response in responses]
+
+    assert asyncio.run(burst()) == [200] * 6
+    assert calls == ["US"]
 
 
 def test_canonical_failure_stays_unavailable(monkeypatch):

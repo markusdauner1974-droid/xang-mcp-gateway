@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -16,8 +17,28 @@ from .config import GatewaySettings
 from .rpc import INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, error_response
 
 
+# The readiness probe is the one endpoint an unauthenticated caller can repeat,
+# and every call runs the canonical service in a worker thread. A short cache
+# plus a single-flight lock keeps that traffic off the executor that serves /mcp/.
+PROBE_TTL_SECONDS = 10.0
+
+
 def create_calendar_app(settings: GatewaySettings) -> FastAPI:
     app = FastAPI(title="XANG MCP Calendar", version=_pkg.__version__, docs_url=None, redoc_url=None)
+    probe_lock = asyncio.Lock()
+    probe_cache: list[tuple[float, bool]] = []
+
+    async def calendar_ready() -> bool:
+        async with probe_lock:
+            if probe_cache and time.monotonic() - probe_cache[0][0] < PROBE_TTL_SECONDS:
+                return probe_cache[0][1]
+            payload = await asyncio.to_thread(
+                calendar_jsonrpc_result, "readyz", "US", settings.calendar_app_root
+            )
+            facts = payload.get("result", {}).get("structuredContent", {})
+            ok = isinstance(facts.get("expected_trading_date"), str) and bool(facts["expected_trading_date"])
+            probe_cache[:] = [(time.monotonic(), ok)]
+            return ok
 
     @app.get("/healthz")
     async def healthz() -> JSONResponse:
@@ -28,9 +49,13 @@ def create_calendar_app(settings: GatewaySettings) -> FastAPI:
 
     @app.get("/readyz")
     async def readyz() -> JSONResponse:
-        payload = await asyncio.to_thread(calendar_jsonrpc_result, "readyz", "US", settings.calendar_app_root)
-        facts = payload.get("result", {}).get("structuredContent", {})
-        ok = isinstance(facts.get("expected_trading_date"), str) and bool(facts["expected_trading_date"])
+        """Answer whether the canonical calendar works, refreshed at most once per TTL.
+
+        Stays unauthenticated so an orchestrator can probe it; the cached verdict
+        means repeated probes cost nothing and a slow canonical service cannot be
+        multiplied into the shared worker pool.
+        """
+        ok = await calendar_ready()
         return JSONResponse(status_code=200 if ok else 503, content={
             "status": "ready" if ok else "degraded",
             "checks": {"market_calendar": {"ok": ok}},
