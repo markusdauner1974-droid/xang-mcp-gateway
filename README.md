@@ -209,7 +209,9 @@ In calendar-only mode:
   nothing and a slow calendar cannot multiply. Degraded verdicts are cached the
   same way. The probe runs on its own single-worker thread with a 5-second limit,
   so a hung calendar answers 503 instead of blocking later probes or taking a
-  thread from `/mcp/`.
+  thread from `/mcp/`. After a timeout the stuck worker is replaced and the next
+  probe backs off (60 s, doubling to a 5-minute cap), so a calendar that never
+  recovers cannot keep spawning threads or queueing work.
 
 Use the standalone [calendar compose template](docker-compose.calendar.yml)
 instead of the legacy proxy template, which still requires backend/SQL secrets.

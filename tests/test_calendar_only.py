@@ -177,6 +177,53 @@ def test_a_hung_calendar_times_out_and_is_cached(monkeypatch):
     assert calls == ["US"]
 
 
+def test_a_timeout_replaces_the_stuck_worker(monkeypatch):
+    """A hung evaluation must not poison readiness for the rest of the process."""
+    calls = []
+    threads = []
+    script = {"hang": True}
+
+    def calendar(request_id, market, root):
+        calls.append(market)
+        threads.append(threading.get_ident())
+        if script["hang"]:
+            time.sleep(0.3)
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"structuredContent": {
+            "expected_trading_date": "2026-10-29"}}}
+
+    monkeypatch.setattr(calendar_module, "calendar_jsonrpc_result", calendar)
+    monkeypatch.setattr(calendar_module, "PROBE_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(calendar_module, "PROBE_TIMEOUT_BACKOFF_SECONDS", 0.0)
+    monkeypatch.setattr(calendar_module, "PROBE_TTL_SECONDS", 0.0)
+    with TestClient(app_module.create_app(make_settings(calendar_only=True))) as client:
+        assert client.get("/readyz").status_code == 503
+        script["hang"] = False
+        assert client.get("/readyz").status_code == 200
+    # The second probe ran on a fresh worker, not on the abandoned one.
+    # Thread names repeat across pools, so compare the thread identities.
+    assert len(calls) == 2
+    assert threads[0] != threads[1]
+
+
+def test_a_timeout_backs_off_before_probing_again(monkeypatch):
+    calls = []
+
+    def hung(request_id, market, root):
+        calls.append(market)
+        time.sleep(0.3)
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"structuredContent": {
+            "expected_trading_date": "2026-10-29"}}}
+
+    monkeypatch.setattr(calendar_module, "calendar_jsonrpc_result", hung)
+    monkeypatch.setattr(calendar_module, "PROBE_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(calendar_module, "PROBE_TTL_SECONDS", 0.0)
+    with TestClient(app_module.create_app(make_settings(calendar_only=True))) as client:
+        assert client.get("/readyz").status_code == 503
+        # The default backoff still covers this probe: no new evaluation.
+        assert client.get("/readyz").status_code == 503
+    assert calls == ["US"]
+
+
 def test_the_probe_runs_on_its_own_thread(monkeypatch):
     """The probe must not borrow the default executor that /mcp/ uses."""
     threads = []
