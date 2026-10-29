@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 
 import httpx
@@ -155,6 +156,40 @@ def test_a_degraded_verdict_is_cached_too(monkeypatch):
         for _ in range(3):
             assert client.get("/readyz").status_code == 503
     assert calls == ["US"]
+
+
+def test_a_hung_calendar_times_out_and_is_cached(monkeypatch):
+    """A stalled evaluation must not hold the lock until it finishes."""
+    calls = []
+
+    def hung(request_id, market, root):
+        calls.append(market)
+        time.sleep(1.0)
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"structuredContent": {
+            "expected_trading_date": "2026-10-29"}}}
+
+    monkeypatch.setattr(calendar_module, "calendar_jsonrpc_result", hung)
+    monkeypatch.setattr(calendar_module, "PROBE_TIMEOUT_SECONDS", 0.05)
+    with TestClient(app_module.create_app(make_settings(calendar_only=True))) as client:
+        assert client.get("/readyz").status_code == 503
+        # Cached: the second probe answers without starting another evaluation.
+        assert client.get("/readyz").status_code == 503
+    assert calls == ["US"]
+
+
+def test_the_probe_runs_on_its_own_thread(monkeypatch):
+    """The probe must not borrow the default executor that /mcp/ uses."""
+    threads = []
+
+    def record_thread(request_id, market, root):
+        threads.append(threading.current_thread().name)
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"structuredContent": {
+            "expected_trading_date": "2026-10-29"}}}
+
+    monkeypatch.setattr(calendar_module, "calendar_jsonrpc_result", record_thread)
+    with TestClient(app_module.create_app(make_settings(calendar_only=True))) as client:
+        assert client.get("/readyz").status_code == 200
+    assert threads and threads[0].startswith("calendar-probe")
 
 
 def test_concurrent_readyz_probes_run_the_calendar_once(monkeypatch):

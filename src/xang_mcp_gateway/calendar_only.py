@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -21,20 +23,51 @@ from .rpc import INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR,
 # and every call runs the canonical service in a worker thread. A short cache
 # plus a single-flight lock keeps that traffic off the executor that serves /mcp/.
 PROBE_TTL_SECONDS = 10.0
+PROBE_TIMEOUT_SECONDS = 5.0
 
 
 def create_calendar_app(settings: GatewaySettings) -> FastAPI:
-    app = FastAPI(title="XANG MCP Calendar", version=_pkg.__version__, docs_url=None, redoc_url=None)
     probe_lock = asyncio.Lock()
     probe_cache: list[tuple[float, bool]] = []
+    # Its own single-worker pool: a hung evaluation occupies this thread and
+    # nothing else, so /mcp/ keeps its share of the default executor.
+    probe_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="calendar-probe")
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        # wait=False: a hung probe thread must not delay shutdown.
+        probe_executor.shutdown(wait=False)
+
+    app = FastAPI(
+        title="XANG MCP Calendar",
+        version=_pkg.__version__,
+        docs_url=None,
+        redoc_url=None,
+        lifespan=lifespan,
+    )
 
     async def calendar_ready() -> bool:
         async with probe_lock:
             if probe_cache and time.monotonic() - probe_cache[0][0] < PROBE_TTL_SECONDS:
                 return probe_cache[0][1]
-            payload = await asyncio.to_thread(
-                calendar_jsonrpc_result, "readyz", "US", settings.calendar_app_root
-            )
+            loop = asyncio.get_running_loop()
+            try:
+                payload = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        probe_executor,
+                        calendar_jsonrpc_result,
+                        "readyz",
+                        "US",
+                        settings.calendar_app_root,
+                    ),
+                    timeout=PROBE_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                # Fail closed and cache it: an unbounded wait would hold the lock
+                # and queue every later probe behind it.
+                probe_cache[:] = [(time.monotonic(), False)]
+                return False
             facts = payload.get("result", {}).get("structuredContent", {})
             ok = isinstance(facts.get("expected_trading_date"), str) and bool(facts["expected_trading_date"])
             probe_cache[:] = [(time.monotonic(), ok)]

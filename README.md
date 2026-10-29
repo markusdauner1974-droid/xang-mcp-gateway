@@ -206,8 +206,10 @@ In calendar-only mode:
   readiness HTTP 503; they never cause a guessed trading date.
 - `/readyz` stays unauthenticated so an orchestrator can probe it, so its verdict
   is cached for 10 seconds and only one probe runs at a time: repeated calls cost
-  nothing, and a slow calendar cannot multiply into the worker pool that answers
-  `/mcp/`. A degraded verdict is cached the same way.
+  nothing and a slow calendar cannot multiply. Degraded verdicts are cached the
+  same way. The probe runs on its own single-worker thread with a 5-second limit,
+  so a hung calendar answers 503 instead of blocking later probes or taking a
+  thread from `/mcp/`.
 
 Use the standalone [calendar compose template](docker-compose.calendar.yml)
 instead of the legacy proxy template, which still requires backend/SQL secrets.
