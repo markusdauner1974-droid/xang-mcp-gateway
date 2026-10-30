@@ -297,3 +297,43 @@ def test_invalid_rpc_and_methods_are_rejected():
         assert client.post("/mcp/", headers=HEADERS, json={
             "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [],
         }).json()["error"]["code"] == -32602
+
+
+def test_any_notification_without_id_is_acknowledged():
+    """JSON-RPC 2.0 forbids answering a notification, whatever its method."""
+    app = app_module.create_app(make_settings(calendar_only=True))
+    with TestClient(app) as client:
+        for method in (
+            "notifications/initialized",
+            "notifications/cancelled",
+            "notifications/progress",
+            "notifications/roots/list_changed",
+        ):
+            response = client.post("/mcp/", headers=HEADERS, json={
+                "jsonrpc": "2.0", "method": method,
+            })
+            assert response.status_code == 202, method
+            assert response.content == b"", method
+
+
+def test_tools_call_times_out_instead_of_hanging(monkeypatch):
+    """A stalled canonical calendar must produce an error, not block forever."""
+    def stuck(*args, **kwargs):
+        time.sleep(5)
+        return {"jsonrpc": "2.0", "id": 1, "result": {}}
+
+    monkeypatch.setattr(calendar_module, "calendar_jsonrpc_result", stuck)
+    settings = make_settings(calendar_only=True)
+    object.__setattr__(settings, "request_timeout_seconds", 0.1)
+    app = app_module.create_app(settings)
+    with TestClient(app) as client:
+        started = time.monotonic()
+        response = request(client, "tools/call", {
+            "name": "market_calendar_status", "arguments": {"market": "US"},
+        })
+        elapsed = time.monotonic() - started
+        body = response.json()
+        assert "error" in body
+        assert body["error"]["code"] == -32000
+        assert body["id"] == 1
+        assert elapsed < 3.0

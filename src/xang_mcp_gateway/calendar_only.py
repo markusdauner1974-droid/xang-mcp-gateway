@@ -16,7 +16,14 @@ import xang_mcp_gateway as _pkg
 from .auth import is_authorized
 from .calendar import CALENDAR_TOOL_DESCRIPTOR, CALENDAR_TOOL_NAME, calendar_jsonrpc_result
 from .config import GatewaySettings
-from .rpc import INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, error_response
+from .rpc import (
+    GATEWAY_DOWNSTREAM_ERROR,
+    INVALID_PARAMS,
+    INVALID_REQUEST,
+    METHOD_NOT_FOUND,
+    PARSE_ERROR,
+    error_response,
+)
 
 # The readiness probe is the one endpoint an unauthenticated caller can repeat,
 # and every call runs the canonical service in a worker thread. A short cache
@@ -128,7 +135,9 @@ def create_calendar_app(settings: GatewaySettings) -> FastAPI:
         params = body.get("params", {})
         if not isinstance(params, dict):
             return JSONResponse(content=error_response(request_id, INVALID_PARAMS, "Params must be an object"))
-        if method == "notifications/initialized" and "id" not in body:
+        # JSON-RPC 2.0: a message without "id" is a notification.
+        # Servers must not answer it, whatever its method is.
+        if "id" not in body:
             return Response(status_code=202)
         if method == "initialize":
             version = params.get("protocolVersion")
@@ -151,7 +160,16 @@ def create_calendar_app(settings: GatewaySettings) -> FastAPI:
             market = args.get("market", "US")
             if not isinstance(market, str) or market.strip().upper() != "US":
                 return JSONResponse(content=error_response(request_id, INVALID_PARAMS, "Only market US is supported"))
-            payload = await asyncio.to_thread(calendar_jsonrpc_result, request_id, "US", settings.calendar_app_root)
+            try:
+                payload = await asyncio.wait_for(
+                    asyncio.to_thread(calendar_jsonrpc_result, request_id, "US", settings.calendar_app_root),
+                    timeout=settings.request_timeout_seconds,
+                )
+            except TimeoutError:
+                # A stalled calendar must not hold the request or an executor
+                # thread indefinitely; answer with a JSON-RPC error instead.
+                return JSONResponse(content=error_response(
+                    request_id, GATEWAY_DOWNSTREAM_ERROR, "Calendar service timed out"))
             return JSONResponse(content=payload)
         else:
             return JSONResponse(content=error_response(request_id, METHOD_NOT_FOUND, "Method not allowed by calendar service"))
