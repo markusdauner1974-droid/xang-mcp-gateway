@@ -75,8 +75,11 @@ class GatewaySettings:
     db_dsn: str | None = None
     calendar_app_root: str = DEFAULT_CALENDAR_APP_ROOT
     candidate_enrichment: bool = True
+    calendar_only: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.calendar_only) is not bool:
+            raise GatewayConfigError("calendar_only must be a boolean")
         if type(self.candidate_enrichment) is not bool:
             raise GatewayConfigError("candidate_enrichment must be a boolean")
         if not math.isfinite(self.request_timeout_seconds) or self.request_timeout_seconds <= 0:
@@ -91,7 +94,7 @@ class GatewaySettings:
             normalized = normalized.rstrip("/") + "/mcp"
         object.__setattr__(self, "backend_mcp_url", normalized + "/")
 
-        if not self.backend_token:
+        if not self.calendar_only and not self.backend_token:
             raise GatewayConfigError("backend_token must not be empty")
         if not self.gateway_token:
             raise GatewayConfigError("gateway_token must not be empty")
@@ -100,17 +103,21 @@ class GatewaySettings:
 
     @property
     def backend_visible_tools(self) -> frozenset[str]:
+        if self.calendar_only:
+            return frozenset()
         return ALL_BACKEND_TOOLS - self.excluded_tools
 
     @property
     def allowed_tools(self) -> frozenset[str]:
         # Local tools are served by the gateway itself and participate in the
         # same allowlist surface (tools/list + tools/call gating).
+        if self.calendar_only:
+            return frozenset({"market_calendar_status"})
         return (ALL_BACKEND_TOOLS - self.excluded_tools) | LOCAL_TOOLS
 
     @property
     def enrichment_enabled(self) -> bool:
-        return self.candidate_enrichment and bool(self.db_dsn)
+        return not self.calendar_only and self.candidate_enrichment and bool(self.db_dsn)
 
     @property
     def enrichable_tools(self) -> frozenset[str]:
@@ -133,6 +140,7 @@ class GatewaySettings:
             candidate_enrichment=_parse_candidate_enrichment(
                 source.get("GATEWAY_CANDIDATE_ENRICHMENT", "true")
             ),
+            calendar_only=_parse_calendar_only(source.get("GATEWAY_CALENDAR_ONLY", "false")),
             calendar_app_root=source.get(
                 "XANG_CALENDAR_BACKEND_APP_ROOT", DEFAULT_CALENDAR_APP_ROOT
             ),
@@ -154,3 +162,9 @@ def _parse_timeout(raw: str) -> float:
 
 def hmac_equal(left: str, right: str) -> bool:
     return hmac.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
+
+
+def _parse_calendar_only(raw: str) -> bool:
+    if not isinstance(raw, str) or raw.strip().lower() not in {"true", "false"}:
+        raise GatewayConfigError("GATEWAY_CALENDAR_ONLY must be true or false")
+    return raw.strip().lower() == "true"

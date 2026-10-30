@@ -185,6 +185,53 @@ the imported module belongs to that file. An already cached module from another
 backend tree cannot substitute for a missing or misconfigured rule source.
 Failures remain invalid/unavailable; no freshness thresholds are reimplemented.
 
+## Calendar-only operation after direct-client migration
+
+Once clients fetch candidates directly from the official backend MCP, set
+`GATEWAY_CALENDAR_ONLY=true` and redeploy. The default is `false`, preserving
+existing deployments. This is a strict boolean; invalid values fail startup.
+
+In calendar-only mode:
+
+- MCP initialization, notifications, ping, and tool discovery are answered locally.
+- The only advertised and callable tool is `market_calendar_status` (US).
+- Candidate, earnings, and write-tool calls are rejected before any forwarding.
+- No backend HTTP transport or candidate SQL provider is constructed, even if
+  callers inject a provider or transport. The enrichment flag cannot override this.
+- Only `GATEWAY_TOKEN` is required; remove `XANG_BACKEND_TOKEN` and `XANG_DB_DSN`
+  from this container after backing up the private deployment configuration.
+- `/healthz` reports `mode=calendar_only`, `enrichment=disabled`, and one tool.
+  `/readyz` checks the canonical local calendar rather than backend MCP or SQL.
+  Calendar errors retain the existing explicit error/null-date contract and make
+  readiness HTTP 503; they never cause a guessed trading date.
+- `/readyz` stays unauthenticated so an orchestrator can probe it, so its verdict
+  is cached for 10 seconds and only one probe runs at a time: repeated calls cost
+  nothing and a slow calendar cannot multiply. Degraded verdicts are cached the
+  same way. The probe runs on its own single-worker thread with a 5-second limit,
+  so a hung calendar answers 503 instead of blocking later probes or taking a
+  thread from `/mcp/`. After a timeout the stuck worker is replaced and the next
+  probe backs off (60 s, doubling to a 5-minute cap), so a calendar that never
+  recovers cannot keep spawning threads or queueing work.
+
+Use the standalone [calendar compose template](docker-compose.calendar.yml)
+instead of the legacy proxy template, which still requires backend/SQL secrets.
+Back up the existing stack configuration before replacing it. Preserve the
+service/container name, network, gateway token, and port binding so existing
+calendar consumers do not need another address change. Retain the source-tree
+and calendar-data paths provided by the Docker image.
+
+Move client candidate requests to the official backend endpoint and its own
+credential first; keep calendar requests on this service. A direct client now
+holds a backend credential rather than relying on gateway credential isolation.
+Audit other consumers before removing proxy/earnings support from a deployment.
+No scanner strategy or earnings-collection behavior is changed by this flag.
+
+When the upstream calendar MCP tool is deployed, validate its contract and
+switch the client calendar endpoint and credential. Stop this service only after
+all remaining consumers have migrated. To roll back, restore the private stack
+configuration and set `GATEWAY_CALENDAR_ONLY=false` with the required backend/SQL
+settings; client routing must be restored separately if needed.
+
 ## Development
 
 ```bash

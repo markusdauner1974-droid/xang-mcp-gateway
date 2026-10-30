@@ -141,6 +141,10 @@ def create_app(
     transport: Transport | None = None,
     facts_provider: FactsProvider | None = None,
 ) -> FastAPI:
+    if settings.calendar_only:
+        from .calendar_only import create_calendar_app
+
+        return create_calendar_app(settings)
     if transport is None:
         from .rpc import HttpxTransport
 

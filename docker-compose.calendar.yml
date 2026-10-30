@@ -1,0 +1,19 @@
+# Calendar-only deployment: no backend MCP credential and no SQL DSN required.
+services:
+  gateway:
+    image: ${IMAGE:-ghcr.io/markusdauner1974-droid/xang-mcp-gateway:latest}
+    container_name: ${CONTAINER_NAME:-xang-mcp-gateway}
+    restart: unless-stopped
+    networks:
+      - md-netzwerk
+    environment:
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:?GATEWAY_TOKEN is required}
+      GATEWAY_CALENDAR_ONLY: "true"
+      GATEWAY_CANDIDATE_ENRICHMENT: "false"
+      GATEWAY_HOST: 0.0.0.0
+    ports:
+      - "${LAN_IP:-192.168.178.10}:${HOST_PORT:-9160}:9160"
+
+networks:
+  md-netzwerk:
+    external: true
