@@ -18,7 +18,6 @@ from .calendar import CALENDAR_TOOL_DESCRIPTOR, CALENDAR_TOOL_NAME, calendar_jso
 from .config import GatewaySettings
 from .rpc import INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, error_response
 
-
 # The readiness probe is the one endpoint an unauthenticated caller can repeat,
 # and every call runs the canonical service in a worker thread. A short cache
 # plus a single-flight lock keeps that traffic off the executor that serves /mcp/.
@@ -73,7 +72,7 @@ def create_calendar_app(settings: GatewaySettings) -> FastAPI:
                     ),
                     timeout=PROBE_TIMEOUT_SECONDS,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # wait_for cannot stop a running thread, and the single worker
                 # would stay occupied forever: abandon the pool (dropping queued
                 # work), build a fresh one for the next probe, and back off so a
