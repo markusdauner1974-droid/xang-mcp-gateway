@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, Response
 import xang_mcp_gateway as _pkg
 
 from .auth import is_authorized
-from .calendar import CALENDAR_TOOL_DESCRIPTOR, CALENDAR_TOOL_NAME, calendar_jsonrpc_result
+from .calendar import CALENDAR_MARKETS, CALENDAR_TOOL_DESCRIPTOR, CALENDAR_TOOL_NAME, calendar_jsonrpc_result
 from .config import GatewaySettings
 from .rpc import (
     GATEWAY_DOWNSTREAM_ERROR,
@@ -158,11 +158,12 @@ def create_calendar_app(settings: GatewaySettings) -> FastAPI:
             if not isinstance(args, dict) or set(args) - {"market"}:
                 return JSONResponse(content=error_response(request_id, INVALID_PARAMS, "Invalid calendar arguments"))
             market = args.get("market", "US")
-            if not isinstance(market, str) or market.strip().upper() != "US":
-                return JSONResponse(content=error_response(request_id, INVALID_PARAMS, "Only market US is supported"))
+            if not isinstance(market, str) or market.strip().upper() not in CALENDAR_MARKETS:
+                return JSONResponse(content=error_response(request_id, INVALID_PARAMS, "Supported markets are US and DE"))
+            market = market.strip().upper()
             try:
                 payload = await asyncio.wait_for(
-                    asyncio.to_thread(calendar_jsonrpc_result, request_id, "US", settings.calendar_app_root),
+                    asyncio.to_thread(calendar_jsonrpc_result, request_id, market, settings.calendar_app_root),
                     timeout=settings.request_timeout_seconds,
                 )
             except TimeoutError:
