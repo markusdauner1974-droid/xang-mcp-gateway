@@ -24,6 +24,7 @@ from typing import Any
 
 CALENDAR_SOURCE = "xang_market_calendar_service"
 CALENDAR_TOOL_NAME = "market_calendar_status"
+CALENDAR_MARKETS = ("US", "DE")
 DEFAULT_CALENDAR_APP_ROOT = "/opt/xang_backend"
 
 CALENDAR_TOOL_DESCRIPTOR: dict[str, Any] = {
@@ -39,7 +40,8 @@ CALENDAR_TOOL_DESCRIPTOR: dict[str, Any] = {
             "market": {
                 "type": "string",
                 "default": "US",
-                "description": "Market code; US supported.",
+                "description": "Market code; US and DE supported.",
+                "enum": list(CALENDAR_MARKETS),
             }
         },
         "additionalProperties": False,

@@ -194,7 +194,7 @@ existing deployments. This is a strict boolean; invalid values fail startup.
 In calendar-only mode:
 
 - MCP initialization, notifications, ping, and tool discovery are answered locally.
-- The only advertised and callable tool is `market_calendar_status` (US).
+- The only advertised and callable tool is `market_calendar_status` (US and DE).
 - Candidate, earnings, and write-tool calls are rejected before any forwarding.
 - No backend HTTP transport or candidate SQL provider is constructed, even if
   callers inject a provider or transport. The enrichment flag cannot override this.
@@ -231,6 +231,23 @@ switch the client calendar endpoint and credential. Stop this service only after
 all remaining consumers have migrated. To roll back, restore the private stack
 configuration and set `GATEWAY_CALENDAR_ONLY=false` with the required backend/SQL
 settings; client routing must be restored separately if needed.
+
+### US and German calendar calls
+
+Calendar-only clients can request either `{"market":"US"}` or
+`{"market":"DE"}`. The default stays US. Codes are trimmed and normalized;
+other market codes and malformed values are rejected before calendar access.
+The tool descriptor advertises both codes.
+
+Both paths call the existing canonical XANG calendar bridge with the requested
+market. The gateway adds no holiday, timezone, session-date or freshness rules.
+There is no other-market fallback. Clients must match each candidate run to its
+own market calendar and keep an unavailable calendar fail-closed.
+
+The readiness endpoint keeps its existing cached US baseline probe; it does not
+attest to every market's current coverage. Validate the DE request separately
+when deploying or checking DE consumers. No credential or database setting is
+added; calendar-only mode still requires only the gateway client token.
 
 ## Development
 

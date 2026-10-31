@@ -277,7 +277,7 @@ def test_canonical_failure_stays_unavailable(monkeypatch):
         assert facts["calendar_status"] == "error"
 
 
-@pytest.mark.parametrize("args", [[], None, {"market": "DE"}, {"market": ""}, {"market": 1}, {"unexpected": True}])
+@pytest.mark.parametrize("args", [[], None, {"market": "XX"}, {"market": ""}, {"market": 1}, {"unexpected": True}])
 def test_invalid_arguments_cannot_call_calendar(monkeypatch, args):
     def forbidden(*args, **kwargs):
         raise AssertionError("invalid input reached calendar")
