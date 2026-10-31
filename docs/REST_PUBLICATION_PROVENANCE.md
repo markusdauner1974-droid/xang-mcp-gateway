@@ -51,6 +51,12 @@ is 5 seconds, statement timeout 5 seconds and lock timeout 1 second. The MCP
 handler also applies `GATEWAY_REQUEST_TIMEOUT`. Driver exceptions are never
 returned to clients because they may contain connection details.
 
+Metadata requests use their own two-worker executor. Additional requests fail
+closed immediately when both workers are occupied; there is no unbounded
+waiting queue. A timed-out running query keeps its slot until it actually
+finishes. Slow metadata queries therefore cannot occupy the calendar's default
+executor. The SQL projection casts the scan identity to text explicitly.
+
 ## Request and response
 
 The tool requires exactly `market` (`US` or `DE`) and `scan_id` (UUID). It proves:

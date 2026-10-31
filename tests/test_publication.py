@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
 
 import pytest
@@ -15,6 +18,7 @@ from xang_mcp_gateway.config import GatewayConfigError, GatewaySettings
 from xang_mcp_gateway.publication import (
     SQL_PUBLICATION,
     TOOL_NAME,
+    PublicationRunner,
     PublicationUnavailable,
     SqlPublicationStore,
     build_proof,
@@ -190,13 +194,14 @@ def test_enabled_surface_is_calendar_and_metadata_only():
 
 
 def test_driver_error_is_sanitized_and_fail_closed():
-    provider = Provider(RuntimeError("postgresql://private-user:private-password@private-host"))
+    marker = "SYNTHETIC_DRIVER_ERROR_MUST_NOT_BE_EXPOSED"
+    provider = Provider(RuntimeError(marker))
     with TestClient(create_calendar_app(settings(), provider)) as client:
         response = call(client)
         result = response.json()["result"]
         assert result["isError"] is True
         assert "structuredContent" not in result
-        assert "private-" not in response.text
+        assert marker not in response.text
 
 
 def test_timeout_is_fail_closed():
@@ -241,3 +246,51 @@ def test_provenance_requires_only_dedicated_dsn_not_backend_or_enrichment_creden
     assert configured.db_dsn is None
     assert configured.backend_visible_tools == set()
     assert not configured.enrichment_enabled
+
+
+def test_sql_scan_identity_is_text_even_for_uuid_database_columns():
+    assert "CAST(s.scan_id AS text) AS scan_id" in SQL_PUBLICATION
+
+
+def test_slow_metadata_is_bounded_and_does_not_occupy_calendar_pool():
+    release = threading.Event()
+    both_started = threading.Event()
+    lock = threading.Lock()
+    calls = []
+
+    class SlowProvider:
+        def lookup(self, market, scan_id):
+            with lock:
+                calls.append(threading.current_thread().name)
+                if len(calls) == 2:
+                    both_started.set()
+            release.wait(3)
+            return build_proof(row(market), market, scan_id)
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        runner = PublicationRunner(SlowProvider())
+        tasks = []
+        try:
+            tasks = [asyncio.create_task(runner.lookup("US", SCAN_ID, 0.2)) for _ in range(2)]
+            deadline = loop.time() + 1
+            while not both_started.is_set() and loop.time() < deadline:
+                await asyncio.sleep(0.001)
+            assert both_started.is_set()
+            with pytest.raises(PublicationUnavailable, match="busy"):
+                await runner.lookup("US", SCAN_ID, 0.2)
+            assert await asyncio.wait_for(asyncio.to_thread(lambda: "calendar-pool-free"), 0.5) == "calendar-pool-free"
+            outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+            assert all(isinstance(outcome, TimeoutError) for outcome in outcomes)
+            # Timed-out queries must not free slots while still running.
+            with pytest.raises(PublicationUnavailable, match="busy"):
+                await runner.lookup("US", SCAN_ID, 0.2)
+            assert len(calls) == 2
+            assert all(name.startswith("publication-metadata") for name in calls)
+        finally:
+            release.set()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            runner.close()
+
+    asyncio.run(scenario())

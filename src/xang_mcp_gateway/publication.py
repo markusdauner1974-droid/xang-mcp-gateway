@@ -6,7 +6,10 @@ computed here. The caller fetches candidates from the official REST API.
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
+from threading import BoundedSemaphore
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -30,7 +33,7 @@ TOOL_DESCRIPTOR = {
 # One parameterised SELECT, one transaction/snapshot. The pointer and the scan
 # must name the SAME run; there is deliberately no last-run fallback.
 SQL_PUBLICATION = """
-SELECT s.scan_id, s.status AS scan_status,
+SELECT CAST(s.scan_id AS text) AS scan_id, s.status AS scan_status,
        s.universe_type AS scan_universe_type, s.universe_market AS scan_market,
        s.feature_run_id, r.status AS run_status, r.as_of_date,
        r.published_at, r.completed_at,
@@ -136,9 +139,33 @@ class SqlPublicationStore:
         return build_proof(dict(rows[0]), market, scan_id)
 
 
-async def publication_result(request_id: Any, arguments: Any, provider: PublicationProvider, timeout: float) -> dict[str, Any]:
+class PublicationRunner:
+    """Two dedicated workers, no unbounded queue, no calendar-pool contention."""
+
+    def __init__(self, provider: PublicationProvider) -> None:
+        self._provider = provider
+        self._capacity = BoundedSemaphore(2)
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="publication-metadata")
+
+    async def lookup(self, market: str, scan_id: str, timeout: float) -> dict[str, Any]:
+        if not self._capacity.acquire(blocking=False):
+            raise PublicationUnavailable("Publication service busy")
+        try:
+            future = self._executor.submit(self._provider.lookup, market, scan_id)
+        except Exception:
+            self._capacity.release()
+            raise
+        # A timed-out running query keeps its slot until the worker actually
+        # finishes. Cancellation before execution also releases exactly once.
+        future.add_done_callback(lambda _completed: self._capacity.release())
+        return await asyncio.wait_for(asyncio.wrap_future(future), timeout=timeout)
+
+    def close(self) -> None:
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+
+async def publication_result(request_id: Any, arguments: Any, runner: PublicationRunner, timeout: float) -> dict[str, Any]:
     """Keep driver errors and credentials out of tool responses."""
-    import asyncio
 
     from .rpc import INVALID_PARAMS, error_response
 
@@ -147,7 +174,7 @@ async def publication_result(request_id: Any, arguments: Any, provider: Publicat
     except ValueError as exc:
         return error_response(request_id, INVALID_PARAMS, str(exc))
     try:
-        facts = await asyncio.wait_for(asyncio.to_thread(provider.lookup, market, scan_id), timeout=timeout)
+        facts = await runner.lookup(market, scan_id, timeout)
     except Exception:
         return {
             "jsonrpc": "2.0", "id": request_id, "result": {

@@ -18,7 +18,7 @@ from .calendar import CALENDAR_MARKETS, CALENDAR_TOOL_DESCRIPTOR, CALENDAR_TOOL_
 from .config import GatewaySettings
 from .publication import TOOL_DESCRIPTOR as PUBLICATION_TOOL_DESCRIPTOR
 from .publication import TOOL_NAME as PUBLICATION_TOOL_NAME
-from .publication import PublicationProvider, SqlPublicationStore, publication_result
+from .publication import PublicationProvider, PublicationRunner, SqlPublicationStore, publication_result
 from .rpc import (
     GATEWAY_DOWNSTREAM_ERROR,
     INVALID_PARAMS,
@@ -49,6 +49,7 @@ def create_calendar_app(settings: GatewaySettings, publication_provider: Publica
         publication_provider = publication_provider or SqlPublicationStore(settings.provenance_db_dsn)  # type: ignore[arg-type]
     else:
         publication_provider = None
+    publication_runner = PublicationRunner(publication_provider) if publication_provider is not None else None
     probe_lock = asyncio.Lock()
     # (timestamp, verdict, ttl) - the ttl is longer after a timeout (backoff).
     probe_cache: list[tuple[float, bool, float]] = []
@@ -56,9 +57,13 @@ def create_calendar_app(settings: GatewaySettings, publication_provider: Publica
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        yield
-        # wait=False: a hung probe thread must not delay shutdown.
-        probe_state["executor"].shutdown(wait=False, cancel_futures=True)  # type: ignore[union-attr]
+        try:
+            yield
+        finally:
+            # wait=False: a hung probe thread must not delay shutdown.
+            probe_state["executor"].shutdown(wait=False, cancel_futures=True)  # type: ignore[union-attr]
+            if publication_runner is not None:
+                publication_runner.close()
 
     app = FastAPI(
         title="XANG MCP Calendar",
@@ -162,9 +167,9 @@ def create_calendar_app(settings: GatewaySettings, publication_provider: Publica
             if publication_provider is not None:
                 result["tools"].append(PUBLICATION_TOOL_DESCRIPTOR)
         elif method == "tools/call":
-            if params.get("name") == PUBLICATION_TOOL_NAME and publication_provider is not None:
+            if params.get("name") == PUBLICATION_TOOL_NAME and publication_runner is not None:
                 return JSONResponse(content=await publication_result(
-                    request_id, params.get("arguments", {}), publication_provider,
+                    request_id, params.get("arguments", {}), publication_runner,
                     settings.request_timeout_seconds,
                 ))
             if params.get("name") != CALENDAR_TOOL_NAME:
