@@ -1,5 +1,10 @@
 # XANG MCP Gateway
 
+Optional REST publication provenance: see
+[`docs/REST_PUBLICATION_PROVENANCE.md`](docs/REST_PUBLICATION_PROVENANCE.md).
+This opt-in local tool supplies only the scan-to-published-run metadata link;
+candidate data continues to come from the official REST API.
+
 A standalone MCP gateway for the self-hosted [xang1234/stock-screener](https://github.com/xang1234/stock-screener)
 stack. It sits **beside** the running backend as its own container and exposes a
 controlled MCP surface for AI clients (e.g. Hermes) without touching the upstream
