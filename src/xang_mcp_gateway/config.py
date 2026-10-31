@@ -76,10 +76,20 @@ class GatewaySettings:
     calendar_app_root: str = DEFAULT_CALENDAR_APP_ROOT
     candidate_enrichment: bool = True
     calendar_only: bool = False
+    publication_provenance: bool = False
+    provenance_db_dsn: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.calendar_only) is not bool:
             raise GatewayConfigError("calendar_only must be a boolean")
+        if type(self.publication_provenance) is not bool:
+            raise GatewayConfigError("publication_provenance must be a boolean")
+        if self.publication_provenance and not self.calendar_only:
+            raise GatewayConfigError("publication_provenance requires calendar_only local mode")
+        if self.publication_provenance and (
+            not isinstance(self.provenance_db_dsn, str) or not self.provenance_db_dsn.strip()
+        ):
+            raise GatewayConfigError("publication_provenance requires XANG_PROVENANCE_DB_DSN")
         if type(self.candidate_enrichment) is not bool:
             raise GatewayConfigError("candidate_enrichment must be a boolean")
         if not math.isfinite(self.request_timeout_seconds) or self.request_timeout_seconds <= 0:
@@ -112,7 +122,10 @@ class GatewaySettings:
         # Local tools are served by the gateway itself and participate in the
         # same allowlist surface (tools/list + tools/call gating).
         if self.calendar_only:
-            return frozenset({"market_calendar_status"})
+            tools = {"market_calendar_status"}
+            if self.publication_provenance:
+                tools.add("scan_publication_status")
+            return frozenset(tools)
         return (ALL_BACKEND_TOOLS - self.excluded_tools) | LOCAL_TOOLS
 
     @property
@@ -141,6 +154,8 @@ class GatewaySettings:
                 source.get("GATEWAY_CANDIDATE_ENRICHMENT", "true")
             ),
             calendar_only=_parse_calendar_only(source.get("GATEWAY_CALENDAR_ONLY", "false")),
+            publication_provenance=_parse_publication_provenance(source.get("GATEWAY_PUBLICATION_PROVENANCE", "false")),
+            provenance_db_dsn=source.get("XANG_PROVENANCE_DB_DSN") or None,
             calendar_app_root=source.get(
                 "XANG_CALENDAR_BACKEND_APP_ROOT", DEFAULT_CALENDAR_APP_ROOT
             ),
@@ -167,4 +182,10 @@ def hmac_equal(left: str, right: str) -> bool:
 def _parse_calendar_only(raw: str) -> bool:
     if not isinstance(raw, str) or raw.strip().lower() not in {"true", "false"}:
         raise GatewayConfigError("GATEWAY_CALENDAR_ONLY must be true or false")
+    return raw.strip().lower() == "true"
+
+
+def _parse_publication_provenance(raw: str) -> bool:
+    if not isinstance(raw, str) or raw.strip().lower() not in {"true", "false"}:
+        raise GatewayConfigError("GATEWAY_PUBLICATION_PROVENANCE must be true or false")
     return raw.strip().lower() == "true"
